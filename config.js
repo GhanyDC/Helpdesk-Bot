@@ -6,11 +6,10 @@
 require('dotenv').config();
 
 module.exports = {
-  // Viber Bot Credentials
-  viber: {
-    authToken: process.env.VIBER_AUTH_TOKEN,
+  // Telegram Bot Credentials
+  telegram: {
+    authToken: process.env.TELEGRAM_BOT_TOKEN,
     botName: process.env.BOT_NAME || 'Helpdesk Bot',
-    botAvatar: process.env.BOT_AVATAR || '',
   },
 
   // Server Configuration

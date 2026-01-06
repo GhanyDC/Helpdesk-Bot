@@ -1,6 +1,8 @@
-# Viber Helpdesk Bot
+# Telegram Helpdesk Bot
 
-A production-ready Viber bot for internal helpdesk support requests. Employees can submit issues through a conversational interface, and support staff can manage issues via keyword commands in a central Viber group.
+A production-ready Telegram bot for internal helpdesk support requests. Employees can submit issues through a conversational interface, and support staff can manage issues via keyword commands in a central Telegram group.
+
+> **📝 Note:** This project was recently migrated from Viber to Telegram. See [TELEGRAM_SETUP.md](TELEGRAM_SETUP.md) for detailed setup instructions.
 
 ## Features
 
@@ -51,7 +53,7 @@ Help-Desk/
 ├── constants.js               # Conversation steps, categories, status values
 ├── conversationManager.js     # Manages user conversation state
 ├── issueManager.js            # Issue creation, storage, and retrieval
-├── viberService.js            # Viber API wrapper
+├── telegramService.js         # Telegram API wrapper
 ├── permissionsManager.js      # User authorization and roles
 ├── messageHandler.js          # Message routing and conversation flow
 ├── package.json               # Dependencies
@@ -66,7 +68,7 @@ Help-Desk/
 ## Prerequisites
 
 1. **Node.js** (v14 or higher)
-2. **Viber Bot Account** - Create at [Viber Partners Portal](https://partners.viber.com)
+2. **Telegram Bot** - Create via [@BotFather](https://t.me/botfather) on Telegram
 3. **ngrok** - For exposing local server to internet during testing
 
 ---
@@ -87,7 +89,7 @@ npm install
 
 This will install:
 - `express` - Web server framework
-- `viber-bot` - Official Viber Bot SDK
+- `node-telegram-bot-api` - Telegram Bot SDK
 - `body-parser` - Parse incoming request bodies
 - `better-sqlite3` - SQLite database
 - `dotenv` - Environment variable management
@@ -106,12 +108,11 @@ Copy-Item .env.example .env
 Open `.env` and fill in the required values:
 
 ```env
-# Get this from Viber Partners Portal
-VIBER_AUTH_TOKEN=your-viber-bot-auth-token-here
+# Get this from @BotFather on Telegram
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
 
 # Bot display info
 BOT_NAME=Helpdesk Bot
-BOT_AVATAR=https://your-avatar-url.com/avatar.jpg
 
 # Your ngrok URL (update after starting ngrok)
 WEBHOOK_URL=https://your-ngrok-url.ngrok.io
@@ -119,15 +120,15 @@ WEBHOOK_URL=https://your-ngrok-url.ngrok.io
 # Server port
 PORT=3000
 
-# Your central Viber group/chat ID (see instructions below)
-SUPPORT_GROUP_ID=your-central-viber-group-id-here
+# Your central Telegram group/chat ID (negative number for groups)
+SUPPORT_GROUP_ID=-1001234567890
 
 # Database path (default is fine)
 DB_PATH=./data/helpdesk.db
 
-# Support staff Viber IDs (comma-separated)
-# To get Viber IDs: Add console.log in server.js when users message the bot
-SUPPORT_STAFF_IDS=viber_id_1,viber_id_2,viber_id_3
+# Support staff Telegram user IDs (comma-separated)
+# To get user IDs: Visit https://api.telegram.org/bot<TOKEN>/getUpdates
+SUPPORT_STAFF_IDS=123456789,987654321
 
 # Employee whitelist (leave empty to allow everyone)
 EMPLOYEE_IDS=
@@ -135,61 +136,30 @@ EMPLOYEE_IDS=
 
 ---
 
-## Getting Viber Bot Credentials
+## Getting Telegram Bot Credentials
 
-### 1. Create a Viber Bot
+> **🚦 Important:** For detailed step-by-step instructions, see [TELEGRAM_SETUP.md](TELEGRAM_SETUP.md)
 
-**The Viber interface has changed! Try one of these methods:**
+### Quick Start
 
-#### Method A: Via Mobile App (Recommended)
-1. Open Viber on your **mobile phone**
-2. Go to **More** → **Settings** → **Viber for Business**
-3. Tap **"Create Bot Account"**
-4. Fill in bot details:
-   - **Name**: Helpdesk Bot
-   - **Icon**: Upload a square image (at least 256x256px)
-   - **Category**: Productivity
-5. Save and you'll receive the **Authentication Token**
-6. Copy the token to `.env` as `VIBER_AUTH_TOKEN`
+1. **Create Bot via @BotFather**
+   - Search for [@BotFather](https://t.me/botfather) on Telegram
+   - Send `/newbot` command
+   - Follow prompts to create your bot
+   - Save the **Bot Token** to `.env` as `TELEGRAM_BOT_TOKEN`
 
-#### Method B: Via Web (if available)
-1. Try this direct link: **https://partners.viber.com/create-bot**
-2. OR go to [Viber for Business](https://www.viber.com/en/business/)
-3. Follow prompts to create a bot account
-4. Copy the **Authentication Token** and paste it in `.env` as `VIBER_AUTH_TOKEN`
+2. **Get Group Chat ID**
+   - Create a Telegram group and add your bot
+   - Send a message in the group
+   - Visit: `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
+   - Look for `"chat":{"id":-1001234567890` (negative number)
+   - Save to `.env` as `SUPPORT_GROUP_ID`
 
-#### Method C: For Testing
-- If you already have ANY Viber bot (even a test bot), you can use its token for testing
-- The bot doesn't need to be published or public
-
-### 2. Get Support Group ID
-
-To send messages to a group, you need the group/chat ID:
-
-**Method 1: Using Bot Events**
-1. Create a Viber group and add your bot to it
-2. Add a temporary log in `server.js` under the MESSAGE_RECEIVED event:
-   ```javascript
-   console.log('Chat ID:', response.chatId);
-   ```
-3. Send a message in the group
-4. Check the console for the chat ID
-5. Copy it to `.env` as `SUPPORT_GROUP_ID`
-
-**Method 2: Using Viber API**
-- The group ID is in the `response.chatId` field when messages are sent in groups
-
-### 3. Get User Viber IDs
-
-To configure support staff permissions:
-
-1. Add a temporary log in `server.js` under MESSAGE_RECEIVED:
-   ```javascript
-   console.log('User ID:', response.userProfile.id);
-   ```
-2. Ask each support staff member to send a message to the bot
-3. Copy their IDs from the console
-4. Add them to `.env` as comma-separated values in `SUPPORT_STAFF_IDS`
+3. **Get User IDs for Permissions**
+   - Users send `/start` to your bot
+   - Visit: `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
+   - Look for `"from":{"id":123456789`
+   - Add to `.env` as `SUPPORT_STAFF_IDS`
 
 ---
 

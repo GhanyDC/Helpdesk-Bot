@@ -1,7 +1,7 @@
 {
-  "name": "viber-helpdesk-bot",
+  "name": "telegram-helpdesk-bot",
   "version": "1.0.0",
-  "description": "Internal Helpdesk Bot for Viber - Handles employee support requests with central group management",
+  "description": "Internal Helpdesk Bot for Telegram - Handles employee support requests with central group management",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -9,7 +9,7 @@
     "test": "node test/testBot.js"
   },
   "keywords": [
-    "viber",
+    "telegram",
     "bot",
     "helpdesk",
     "support"
@@ -17,11 +17,11 @@
   "author": "Your Company",
   "license": "ISC",
   "dependencies": {
-    "express": "^4.18.2",
-    "viber-bot": "^1.0.13",
+    "better-sqlite3": "^12.5.0",
     "body-parser": "^1.20.2",
-    "better-sqlite3": "^9.2.2",
     "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "node-telegram-bot-api": "^0.64.0",
     "uuid": "^9.0.1"
   },
   "devDependencies": {

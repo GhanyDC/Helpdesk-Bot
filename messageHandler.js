@@ -6,18 +6,19 @@
 
 const conversationManager = require('./conversationManager');
 const issueManager = require('./issueManager');
-const viberService = require('./viberService');
+const telegramService = require('./telegramService');
 const permissionsManager = require('./permissionsManager');
 const { CONVERSATION_STEPS, SUPPORT_KEYWORDS, ISSUE_STATUS } = require('./constants');
 
 class MessageHandler {
   /**
    * Handle incoming text message
-   * @param {object} message - Viber message object
+   * @param {object} message - Telegram message object
    * @param {object} userProfile - User profile information
    */
   async handleMessage(message, userProfile) {
     const userId = userProfile.id;
+    const chatId = userProfile.chatId;
     const userName = userProfile.name || 'User';
     const messageText = message.text.trim();
 
@@ -25,14 +26,14 @@ class MessageHandler {
 
     // Check if this is a support staff command
     if (this.isSupportCommand(messageText)) {
-      await this.handleSupportCommand(messageText, userId, userName);
+      await this.handleSupportCommand(messageText, userId, chatId, userName);
       return;
     }
 
     // Check if user can create issues
     const authCheck = permissionsManager.checkAuthorization(userId, 'create');
     if (!authCheck.authorized) {
-      await viberService.sendMessage(userId, authCheck.message);
+      await telegramService.sendMessage(chatId, authCheck.message);
       return;
     }
 
@@ -41,10 +42,10 @@ class MessageHandler {
 
     if (!conversation) {
       // Start new conversation
-      await this.startNewIssue(userId, userProfile);
+      await this.startNewIssue(userId, chatId, userProfile);
     } else {
       // Continue existing conversation
-      await this.processConversationStep(userId, conversation, messageText, userProfile);
+      await this.processConversationStep(userId, chatId, conversation, messageText, userProfile);
     }
   }
 
@@ -66,13 +67,14 @@ class MessageHandler {
    * Handle support staff commands (ACK, ONGOING, RESOLVED)
    * @param {string} text - Command text
    * @param {string} userId - User ID
+   * @param {string} chatId - Chat ID
    * @param {string} userName - User name
    */
-  async handleSupportCommand(text, userId, userName) {
+  async handleSupportCommand(text, userId, chatId, userName) {
     // Check if user is support staff
     const authCheck = permissionsManager.checkAuthorization(userId, 'update');
     if (!authCheck.authorized) {
-      await viberService.sendMessage(userId, authCheck.message);
+      await telegramService.sendMessage(chatId, authCheck.message);
       return;
     }
 
@@ -80,8 +82,8 @@ class MessageHandler {
     const parts = text.trim().split(/\s+/);
     
     if (parts.length < 2) {
-      await viberService.sendMessage(
-        userId,
+      await telegramService.sendMessage(
+        chatId,
         '❌ Invalid command format.\n\nUsage:\nACK ISSUE-ID\nONGOING ISSUE-ID\nRESOLVED ISSUE-ID'
       );
       return;
@@ -103,7 +105,7 @@ class MessageHandler {
         newStatus = ISSUE_STATUS.RESOLVED;
         break;
       default:
-        await viberService.sendMessage(userId, '❌ Unknown command.');
+        await telegramService.sendMessage(chatId, '❌ Unknown command.');
         return;
     }
 
@@ -111,7 +113,7 @@ class MessageHandler {
     const issue = issueManager.getIssue(issueId);
     
     if (!issue) {
-      await viberService.sendMessage(userId, `❌ Issue not found: ${issueId}`);
+      await telegramService.sendMessage(chatId, `❌ Issue not found: ${issueId}`);
       return;
     }
 
@@ -120,13 +122,13 @@ class MessageHandler {
 
     if (success) {
       // Confirm to support staff
-      await viberService.sendMessage(
-        userId,
+      await telegramService.sendMessage(
+        chatId,
         `✅ Updated ${issueId}\nStatus: ${issue.status} → ${newStatus}`
       );
 
       // Notify the employee who created the issue
-      await viberService.notifyStatusUpdate(
+      await telegramService.notifyStatusUpdate(
         issue.employee_id,
         issueId,
         issue.status,
@@ -136,71 +138,73 @@ class MessageHandler {
 
       console.log(`[MessageHandler] Status updated: ${issueId} → ${newStatus} by ${userName}`);
     } else {
-      await viberService.sendMessage(userId, '❌ Failed to update issue status.');
+      await telegramService.sendMessage(chatId, '❌ Failed to update issue status.');
     }
   }
 
   /**
    * Start a new issue creation flow
    * @param {string} userId - User ID
+   * @param {string} chatId - Chat ID
    * @param {object} userProfile - User profile
    */
-  async startNewIssue(userId, userProfile) {
+  async startNewIssue(userId, chatId, userProfile) {
     conversationManager.startConversation(userId, userProfile);
     
-    await viberService.sendKeyboard(
-      userId,
+    await telegramService.sendKeyboard(
+      chatId,
       '🏢 Welcome to the Helpdesk Bot!\n\nPlease select your department:',
-      viberService.getDepartmentKeyboard()
+      telegramService.getDepartmentKeyboard()
     );
   }
 
   /**
    * Process conversation step based on user input
    * @param {string} userId - User ID
+   * @param {string} chatId - Chat ID
    * @param {object} conversation - Conversation object
    * @param {string} messageText - User's message
    * @param {object} userProfile - User profile
    */
-  async processConversationStep(userId, conversation, messageText, userProfile) {
+  async processConversationStep(userId, chatId, conversation, messageText, userProfile) {
     const currentStep = conversation.currentStep;
 
     switch (currentStep) {
       case CONVERSATION_STEPS.DEPARTMENT:
-        await this.handleDepartmentStep(userId, messageText);
+        await this.handleDepartmentStep(userId, chatId, messageText);
         break;
 
       case CONVERSATION_STEPS.CATEGORY:
-        await this.handleCategoryStep(userId, messageText);
+        await this.handleCategoryStep(userId, chatId, messageText);
         break;
 
       case CONVERSATION_STEPS.URGENCY:
-        await this.handleUrgencyStep(userId, messageText);
+        await this.handleUrgencyStep(userId, chatId, messageText);
         break;
 
       case CONVERSATION_STEPS.DESCRIPTION:
-        await this.handleDescriptionStep(userId, messageText);
+        await this.handleDescriptionStep(userId, chatId, messageText);
         break;
 
       case CONVERSATION_STEPS.CONTACT:
-        await this.handleContactStep(userId, messageText, userProfile);
+        await this.handleContactStep(userId, chatId, messageText, userProfile);
         break;
 
       case CONVERSATION_STEPS.CONFIRMATION:
-        await this.handleConfirmationStep(userId, messageText);
+        await this.handleConfirmationStep(userId, chatId, messageText);
         break;
 
       default:
-        await viberService.sendMessage(userId, '❌ Unknown step. Let\'s start over.');
+        await telegramService.sendMessage(chatId, '❌ Unknown step. Let\'s start over.');
         conversationManager.endConversation(userId);
-        await this.startNewIssue(userId, userProfile);
+        await this.startNewIssue(userId, chatId, userProfile);
     }
   }
 
   /**
    * Handle department selection
    */
-  async handleDepartmentStep(userId, department) {
+  async handleDepartmentStep(userId, chatId, department) {
     conversationManager.updateConversation(
       userId,
       'department',
@@ -208,17 +212,17 @@ class MessageHandler {
       CONVERSATION_STEPS.CATEGORY
     );
 
-    await viberService.sendKeyboard(
-      userId,
+    await telegramService.sendKeyboard(
+      chatId,
       '🔧 Please select the issue category:',
-      viberService.getCategoryKeyboard()
+      telegramService.getCategoryKeyboard()
     );
   }
 
   /**
    * Handle category selection
    */
-  async handleCategoryStep(userId, category) {
+  async handleCategoryStep(userId, chatId, category) {
     conversationManager.updateConversation(
       userId,
       'category',
@@ -226,17 +230,17 @@ class MessageHandler {
       CONVERSATION_STEPS.URGENCY
     );
 
-    await viberService.sendKeyboard(
-      userId,
+    await telegramService.sendKeyboard(
+      chatId,
       '⚠️ Please select the urgency level:',
-      viberService.getUrgencyKeyboard()
+      telegramService.getUrgencyKeyboard()
     );
   }
 
   /**
    * Handle urgency selection
    */
-  async handleUrgencyStep(userId, urgency) {
+  async handleUrgencyStep(userId, chatId, urgency) {
     conversationManager.updateConversation(
       userId,
       'urgency',
@@ -244,8 +248,8 @@ class MessageHandler {
       CONVERSATION_STEPS.DESCRIPTION
     );
 
-    await viberService.sendMessage(
-      userId,
+    await telegramService.sendMessage(
+      chatId,
       '📝 Please describe the issue in detail:\n\n(Type your description and send)'
     );
   }
@@ -253,7 +257,7 @@ class MessageHandler {
   /**
    * Handle description input
    */
-  async handleDescriptionStep(userId, description) {
+  async handleDescriptionStep(userId, chatId, description) {
     conversationManager.updateConversation(
       userId,
       'description',
@@ -261,8 +265,8 @@ class MessageHandler {
       CONVERSATION_STEPS.CONTACT
     );
 
-    await viberService.sendMessage(
-      userId,
+    await telegramService.sendMessage(
+      chatId,
       '📞 Who should we contact regarding this issue?\n\n(Enter name and contact info, or type "ME" to use your info)'
     );
   }
@@ -270,7 +274,7 @@ class MessageHandler {
   /**
    * Handle contact person input
    */
-  async handleContactStep(userId, contact, userProfile) {
+  async handleContactStep(userId, chatId, contact, userProfile) {
     const contactPerson = contact.toUpperCase() === 'ME' ? userProfile.name : contact;
     
     conversationManager.updateConversation(
@@ -297,30 +301,30 @@ ${data.description}
 Is this correct?
     `.trim();
 
-    await viberService.sendKeyboard(
-      userId,
+    await telegramService.sendKeyboard(
+      chatId,
       summary,
-      viberService.getConfirmationKeyboard()
+      telegramService.getConfirmationKeyboard()
     );
   }
 
   /**
    * Handle confirmation (Yes/No)
    */
-  async handleConfirmationStep(userId, response) {
+  async handleConfirmationStep(userId, chatId, response) {
     const upperResponse = response.toUpperCase();
 
     if (upperResponse.includes('YES') || upperResponse === '✅ YES, SUBMIT') {
-      await this.submitIssue(userId);
+      await this.submitIssue(userId, chatId);
     } else if (upperResponse.includes('NO') || upperResponse === '❌ NO, CANCEL') {
       conversationManager.endConversation(userId);
-      await viberService.sendMessage(
-        userId,
+      await telegramService.sendMessage(
+        chatId,
         '❌ Issue creation cancelled.\n\nSend any message to start a new issue.'
       );
     } else {
-      await viberService.sendMessage(
-        userId,
+      await telegramService.sendMessage(
+        chatId,
         'Please click one of the buttons: ✅ Yes, Submit or ❌ No, Cancel'
       );
     }
@@ -329,11 +333,11 @@ Is this correct?
   /**
    * Submit the issue to the system
    */
-  async submitIssue(userId) {
+  async submitIssue(userId, chatId) {
     const conversation = conversationManager.getConversation(userId);
     
     if (!conversation) {
-      await viberService.sendMessage(userId, '❌ Session expired. Please start over.');
+      await telegramService.sendMessage(chatId, '❌ Session expired. Please start over.');
       return;
     }
 
@@ -354,13 +358,13 @@ Is this correct?
     conversationManager.endConversation(userId);
 
     // Notify employee
-    await viberService.sendMessage(
-      userId,
+    await telegramService.sendMessage(
+      chatId,
       `✅ Issue created successfully!\n\n📋 Issue ID: ${issue.issueId}\n\nOur support team has been notified and will respond soon.\n\nYou will receive status updates automatically.`
     );
 
     // Send to support group
-    await viberService.sendIssueToSupportGroup(issue);
+    await telegramService.sendIssueToSupportGroup(issue);
 
     console.log(`[MessageHandler] Issue ${issue.issueId} submitted by ${conversation.userName}`);
   }

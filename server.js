@@ -1,8 +1,8 @@
 /**
- * Viber Helpdesk Bot - Main Server
+ * Telegram Helpdesk Bot - Main Server
  * 
- * This is the entry point for the Viber Helpdesk Bot.
- * It sets up the Express webhook server and handles incoming Viber events.
+ * This is the entry point for the Telegram Helpdesk Bot.
+ * It sets up the Express webhook server and handles incoming Telegram updates.
  * 
  * Features:
  * - Receives messages from employees
@@ -18,18 +18,17 @@
 
 const express = require('express');
 const bodyParser = require('body-parser');
-const BotEvents = require('viber-bot').Events;
 
 // Import modules
 const config = require('./config');
-const viberService = require('./viberService');
+const telegramService = require('./telegramService');
 const messageHandler = require('./messageHandler');
 const conversationManager = require('./conversationManager');
 const issueManager = require('./issueManager');
 
 // Validate configuration
-if (!config.viber.authToken) {
-  console.error('❌ VIBER_AUTH_TOKEN is not set in .env file');
+if (!config.telegram.authToken) {
+  console.error('❌ TELEGRAM_BOT_TOKEN is not set in .env file');
   process.exit(1);
 }
 
@@ -48,84 +47,89 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
 // Get bot instance
-const bot = viberService.getBot();
+const bot = telegramService.getBot();
 
 // Health check endpoint
 app.get('/', (req, res) => {
   res.send({
     status: 'OK',
-    bot: config.viber.botName,
+    bot: config.telegram.botName,
     timestamp: new Date().toISOString(),
   });
 });
 
-// Viber webhook endpoint
-app.use('/viber/webhook', bot.middleware());
-
-// Set webhook
-bot.setWebhook(config.server.webhookUrl + '/viber/webhook')
-  .then(() => {
-    console.log('✅ Webhook set successfully');
-    console.log(`📍 Webhook URL: ${config.server.webhookUrl}/viber/webhook`);
-  })
-  .catch(error => {
-    console.error('❌ Error setting webhook:', error);
-  });
-
-// Event: Bot subscribed (user started conversation)
-bot.on(BotEvents.SUBSCRIBED, async (response) => {
-  const userId = response.userProfile.id;
-  const userName = response.userProfile.name;
-  
-  console.log(`[Bot] User subscribed: ${userName} (${userId})`);
-  
-  await viberService.sendMessage(
-    userId,
-    `👋 Hello ${userName}!\n\nWelcome to the ${config.viber.botName}.\n\nI'm here to help you submit and track helpdesk issues.\n\nSend any message to create a new issue.`
-  );
+// Telegram webhook endpoint
+app.post('/telegram/webhook', async (req, res) => {
+  try {
+    const update = req.body;
+    
+    // Handle different types of updates
+    if (update.message) {
+      await handleMessage(update.message);
+    } else if (update.callback_query) {
+      // Handle callback queries if needed in the future
+      console.log('[Bot] Callback query received');
+    }
+    
+    res.sendStatus(200);
+  } catch (error) {
+    console.error('[Bot] Error processing update:', error);
+    res.sendStatus(500);
+  }
 });
 
-// Event: User unsubscribed
-bot.on(BotEvents.UNSUBSCRIBED, (userId) => {
-  console.log(`[Bot] User unsubscribed: ${userId}`);
+// Handle incoming messages
+async function handleMessage(message) {
+  const chatId = message.chat.id;
+  const userId = message.from.id.toString();
+  const userName = message.from.first_name || 'User';
   
-  // Clean up any active conversation
-  conversationManager.endConversation(userId);
-});
-
-// Event: Message received
-bot.on(BotEvents.MESSAGE_RECEIVED, async (message, response) => {
-  const userProfile = response.userProfile;
-  
-  // Only handle text messages
+  // Handle different message types
   if (message.text) {
+    // Check for /start command
+    if (message.text === '/start') {
+      await telegramService.sendMessage(
+        chatId,
+        `👋 Hello ${userName}!\n\nWelcome to the ${config.telegram.botName}.\n\nI'm here to help you submit and track helpdesk issues.\n\nSend any message to create a new issue.`
+      );
+      return;
+    }
+    
+    // Create user profile object similar to Viber format
+    const userProfile = {
+      id: userId,
+      name: userName,
+      chatId: chatId,
+    };
+    
     try {
       await messageHandler.handleMessage(message, userProfile);
     } catch (error) {
       console.error('[Bot] Error handling message:', error);
-      await viberService.sendMessage(
-        userProfile.id,
+      await telegramService.sendMessage(
+        chatId,
         '❌ An error occurred while processing your message. Please try again.'
       );
     }
   } else {
     // Handle non-text messages (images, stickers, etc.)
-    await viberService.sendMessage(
-      userProfile.id,
+    await telegramService.sendMessage(
+      chatId,
       'ℹ️ Please send text messages only. Images and other media are not supported at this time.'
     );
   }
-});
+}
 
-// Event: Conversation started (rare, mainly for bot info)
-bot.on(BotEvents.CONVERSATION_STARTED, async (response, isSubscribed) => {
-  console.log(`[Bot] Conversation started with: ${response.userProfile.id}`);
-});
-
-// Event: Error
-bot.on(BotEvents.ERROR, (error) => {
-  console.error('[Bot] Viber bot error:', error);
-});
+// Set webhook
+const webhookUrl = `${config.server.webhookUrl}/telegram/webhook`;
+bot.setWebHook(webhookUrl)
+  .then(() => {
+    console.log('✅ Webhook set successfully');
+    console.log(`📍 Webhook URL: ${webhookUrl}`);
+  })
+  .catch(error => {
+    console.error('❌ Error setting webhook:', error);
+  });
 
 // Cleanup routine - remove expired conversations every 5 minutes
 setInterval(() => {
@@ -152,11 +156,11 @@ process.on('SIGTERM', () => {
 // Start server
 app.listen(port, () => {
   console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log('🤖 Viber Helpdesk Bot Server');
+  console.log('🤖 Telegram Helpdesk Bot Server');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log(`✅ Server running on port ${port}`);
-  console.log(`📍 Webhook: ${config.server.webhookUrl}/viber/webhook`);
-  console.log(`🤖 Bot Name: ${config.viber.botName}`);
+  console.log(`📍 Webhook: ${config.server.webhookUrl}/telegram/webhook`);
+  console.log(`🤖 Bot Name: ${config.telegram.botName}`);
   console.log(`💾 Database: ${config.database.path}`);
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
   console.log('ℹ️  Waiting for messages...\n');
