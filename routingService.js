@@ -252,18 +252,153 @@ Created: ${new Date(issue.createdAt).toLocaleString()}
 
     // Notify central monitoring (if enabled)
     if (this.enableCentralMonitoring && this.centralMonitoringGroup) {
-      const updateMessage = `
-[📊Branch: ${issue.branch || 'N/A'}
-📂  STATUS UPDATE]
+      let updateMessage = '';
+      
+      // For RESOLVED status, send detailed branch metrics
+      if (newStatus === 'RESOLVED') {
+        const branchStats = this.getBranchStatsToday(issue.branch);
+        const yesterdayStats = this.getBranchStatsYesterday(issue.branch);
+        const avgResponseTime = this.getAverageResponseTime(issue.branch);
+        
+        updateMessage = `
+[📊 CENTRAL MONITORING - Read Only]
+
+✅ ISSUE RESOLVED
 
 📋 Issue: ${issue.issue_id}
-🏢 Department: ${issue.department}
+🏢 Branch: ${issue.branch}
+📂 Department: ${issue.department}
+⚠️ Urgency: ${issue.urgency}
+👤 Resolved by: ${updatedBy}
+⏰ ${new Date().toLocaleString()}
+
+━━━━━━━━━━━━━━━━━━━
+📊 ${issue.branch} BRANCH METRICS TODAY:
+├─ Total Issues: ${branchStats.total} (${this.getChangeIndicator(branchStats.total, yesterdayStats.total)} from yesterday: ${yesterdayStats.total})
+├─ Open Issues: ${branchStats.open}
+├─ Resolved Today: ${branchStats.resolved}
+└─ Avg Response Time: ${avgResponseTime}
+        `.trim();
+      } else {
+        // For other status updates, send simple notification
+        updateMessage = `
+[📊 CENTRAL MONITORING - Read Only]
+
+📊 STATUS UPDATE
+
+📋 Issue: ${issue.issue_id}
+🏢 Branch: ${issue.branch}
+📂 Department: ${issue.department}
+⚠️ Urgency: ${issue.urgency}
 📊 Status: ${oldStatus} → ${newStatus}
 👤 Updated by: ${updatedBy}
 ⏰ ${new Date().toLocaleString()}
-      `.trim();
+        `.trim();
+      }
 
       await messagingAdapter.sendGroupMessage(this.centralMonitoringGroup, updateMessage);
+    }
+  }
+
+  /**
+   * Get change indicator for metrics comparison
+   * @param {number} current - Current value
+   * @param {number} previous - Previous value
+   * @returns {string} - Arrow indicator
+   */
+  getChangeIndicator(current, previous) {
+    if (current > previous) return '↑';
+    if (current < previous) return '↓';
+    return '→';
+  }
+
+  /**
+   * Get branch statistics for yesterday
+   * @param {string} branch - Branch name
+   * @returns {object} - Yesterday's stats
+   */
+  getBranchStatsYesterday(branch) {
+    try {
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+      const allIssues = issueManager.getAllIssues({});
+      const yesterdayIssues = allIssues.filter(issue => {
+        const issueDate = issue.created_at.split(' ')[0];
+        const issueBranch = issue.branch || null;
+        return issueDate === yesterdayStr && issueBranch === branch;
+      });
+
+      const total = yesterdayIssues.length;
+      const resolved = yesterdayIssues.filter(i => i.status === 'RESOLVED').length;
+      const open = yesterdayIssues.filter(i => i.status !== 'RESOLVED').length;
+
+      return { total, open, resolved };
+    } catch (error) {
+      console.error('[RoutingService] Error calculating yesterday stats:', error);
+      return { total: 0, open: 0, resolved: 0 };
+    }
+  }
+
+  /**
+   * Calculate average response time for a branch today
+   * Response time = time from creation to first status change
+   * @param {string} branch - Branch name
+   * @returns {string} - Formatted average time
+   */
+  getAverageResponseTime(branch) {
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const allIssues = issueManager.getAllIssues({});
+      
+      const todayIssues = allIssues.filter(issue => {
+        const issueDate = issue.created_at.split(' ')[0];
+        const issueBranch = issue.branch || null;
+        return issueDate === today && issueBranch === branch && issue.status !== 'NEW';
+      });
+
+      if (todayIssues.length === 0) {
+        return 'N/A';
+      }
+
+      // Calculate response times
+      let totalMinutes = 0;
+      let count = 0;
+
+      todayIssues.forEach(issue => {
+        const history = issueManager.getIssueHistory(issue.issue_id);
+        if (history && history.length > 0) {
+          // First status change
+          const firstChange = history[0];
+          const created = new Date(issue.created_at);
+          const responded = new Date(firstChange.changed_at);
+          const diffMs = responded - created;
+          const diffMins = Math.floor(diffMs / 60000);
+          
+          if (diffMins >= 0) {
+            totalMinutes += diffMins;
+            count++;
+          }
+        }
+      });
+
+      if (count === 0) {
+        return 'N/A';
+      }
+
+      const avgMinutes = Math.round(totalMinutes / count);
+      
+      if (avgMinutes < 60) {
+        return `${avgMinutes} mins`;
+      } else {
+        const hours = Math.floor(avgMinutes / 60);
+        const mins = avgMinutes % 60;
+        return `${hours}h ${mins}m`;
+      }
+    } catch (error) {
+      console.error('[RoutingService] Error calculating avg response time:', error);
+      return 'N/A';
     }
   }
 }
