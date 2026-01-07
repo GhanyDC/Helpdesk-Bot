@@ -1,12 +1,22 @@
 /**
  * Constants Module
  * Defines all conversation steps, issue categories, and status values
+ * 
+ * IMPORTANT ORGANIZATIONAL STRUCTURE:
+ * - BRANCHES = Physical locations / companies (JHQ, CHQ, GS)
+ *   → Used for ROUTING tickets to support groups
+ *   → Each branch has ONE support group
+ * 
+ * - DEPARTMENTS = Functional divisions (Accounting, Sales, HR, etc.)
+ *   → Used for CONTEXT ONLY (stored as metadata)
+ *   → NOT used for routing decisions
  */
 
 // Conversation Steps - tracks where user is in the flow
 const CONVERSATION_STEPS = {
   START: 'START',
-  DEPARTMENT: 'DEPARTMENT',
+  BRANCH: 'BRANCH',           // NEW: Ask for branch FIRST (routing key)
+  DEPARTMENT: 'DEPARTMENT',   // Ask for department SECOND (context only)
   CATEGORY: 'CATEGORY',
   URGENCY: 'URGENCY',
   DESCRIPTION: 'DESCRIPTION',
@@ -15,13 +25,22 @@ const CONVERSATION_STEPS = {
   COMPLETED: 'COMPLETED',
 };
 
-// Department Options
+// Branch/Company Options (ROUTING KEY)
+// Each branch has its own support group
+const BRANCHES = {
+  JHQ: 'JHQ',   // Main Head Office
+  CHQ: 'CHQ',   // Regional Office
+  GS: 'GS',     // Service Center
+};
+
+// Department Options (CONTEXT ONLY - NOT FOR ROUTING)
+// Stored in ticket for informational purposes
 const DEPARTMENTS = {
-  SALES: 'Sales',
   ACCOUNTING: 'Accounting',
-  BRANCH: 'Branch',
+  SALES: 'Sales',
   HR: 'HR',
   OPERATIONS: 'Operations',
+  IT: 'IT',
   OTHER: 'Other',
 };
 
@@ -60,6 +79,7 @@ const SUPPORT_KEYWORDS = {
 
 module.exports = {
   CONVERSATION_STEPS,
+  BRANCHES,        // NEW: Branch constants
   DEPARTMENTS,
   CATEGORIES,
   URGENCY_LEVELS,

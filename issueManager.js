@@ -36,6 +36,7 @@ class IssueManager {
           issue_id TEXT PRIMARY KEY,
           employee_id TEXT NOT NULL,
           employee_name TEXT NOT NULL,
+          branch TEXT NOT NULL,
           department TEXT NOT NULL,
           category TEXT NOT NULL,
           urgency TEXT NOT NULL,
@@ -47,6 +48,17 @@ class IssueManager {
           resolved_at DATETIME
         )
       `);
+
+      // Migration: Add branch column if it doesn't exist (for existing databases)
+      try {
+        this.db.exec(`ALTER TABLE issues ADD COLUMN branch TEXT`);
+        console.log('[IssueManager] Added branch column to existing database');
+      } catch (error) {
+        // Column already exists or other error - safe to ignore
+        if (!error.message.includes('duplicate column name')) {
+          console.warn('[IssueManager] Branch column migration note:', error.message);
+        }
+      }
 
       // Create status history table for audit trail
       this.db.exec(`
@@ -96,7 +108,12 @@ class IssueManager {
 
   /**
    * Create a new issue
-   * @param {object} issueData - Issue information
+   * 
+   * IMPORTANT: Requires both branch (routing) and department (context)
+   * - branch: JHQ/CHQ/GS → determines which support group receives the issue
+   * - department: Accounting/Sales/HR/etc → stored as metadata for context
+   * 
+   * @param {object} issueData - Issue information (must include branch + department)
    * @returns {object} - Created issue with ID
    */
   createIssue(issueData) {
@@ -104,9 +121,9 @@ class IssueManager {
     
     const stmt = this.db.prepare(`
       INSERT INTO issues (
-        issue_id, employee_id, employee_name, department, 
+        issue_id, employee_id, employee_name, branch, department, 
         category, urgency, description, contact_person, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     try {
@@ -114,7 +131,8 @@ class IssueManager {
         issueId,
         issueData.employeeId,
         issueData.employeeName,
-        issueData.department,
+        issueData.branch,          // ROUTING KEY
+        issueData.department,      // METADATA
         issueData.category,
         issueData.urgency,
         issueData.description,
@@ -125,7 +143,7 @@ class IssueManager {
       // Log initial status
       this.logStatusChange(issueId, null, ISSUE_STATUS.NEW, 'SYSTEM', 'System');
 
-      console.log(`[IssueManager] Created issue: ${issueId}`);
+      console.log(`[IssueManager] Created issue: ${issueId} (Branch: ${issueData.branch}, Dept: ${issueData.department})`);
       
       return {
         issueId,

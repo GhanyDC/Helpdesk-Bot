@@ -18,6 +18,9 @@ class ConversationManager {
 
   /**
    * Start a new conversation for a user
+   * 
+   * CORRECTED: Starts with BRANCH step (routing key), not department
+   * 
    * @param {string} userId - Viber user ID
    * @param {object} userInfo - User information (name, avatar, etc.)
    */
@@ -25,7 +28,7 @@ class ConversationManager {
     const conversation = {
       userId,
       userName: userInfo.name || 'Unknown User',
-      currentStep: CONVERSATION_STEPS.DEPARTMENT,
+      currentStep: CONVERSATION_STEPS.BRANCH,  // CORRECTED: Start with branch
       data: {},
       startTime: new Date(),
       lastActivity: new Date(),

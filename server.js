@@ -25,6 +25,7 @@ const telegramService = require('./telegramService');
 const messageHandler = require('./messageHandler');
 const conversationManager = require('./conversationManager');
 const issueManager = require('./issueManager');
+const schedulerService = require('./schedulerService');
 
 // Validate configuration
 if (!config.telegram.authToken) {
@@ -90,7 +91,7 @@ async function handleMessage(message) {
     if (message.text === '/start') {
       await telegramService.sendMessage(
         chatId,
-        `👋 Hello ${userName}!\n\nWelcome to the ${config.telegram.botName}.\n\nI'm here to help you submit and track helpdesk issues.\n\nSend any message to create a new issue.`
+        `👋 Hello ${userName}!\n\nWelcome to the ${config.telegram.botName}.\n\nI'm here to help you submit and track helpdesk issues.\n\n📋 To create an issue: Send any message\n📊 For statistics: Send /stats\n❓ For help: Send /help`
       );
       return;
     }
@@ -136,9 +137,15 @@ setInterval(() => {
   conversationManager.cleanupExpiredConversations();
 }, 5 * 60 * 1000);
 
+// Start scheduler for daily reports
+schedulerService.start();
+
 // Graceful shutdown
 process.on('SIGINT', () => {
   console.log('\n[Server] Shutting down gracefully...');
+  
+  // Stop scheduler
+  schedulerService.stop();
   
   // Close database connection
   issueManager.close();
@@ -149,6 +156,7 @@ process.on('SIGINT', () => {
 
 process.on('SIGTERM', () => {
   console.log('\n[Server] Received SIGTERM, shutting down...');
+  schedulerService.stop();
   issueManager.close();
   process.exit(0);
 });

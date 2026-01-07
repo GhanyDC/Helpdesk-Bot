@@ -2,13 +2,19 @@
  * Message Handler
  * Routes incoming messages and processes user input
  * Handles conversation flow and support staff commands
+ * 
+ * PLATFORM-AGNOSTIC BUSINESS LOGIC
+ * Uses messagingAdapter instead of direct platform calls
+ * This allows switching from Telegram to Viber without changing this file
  */
 
 const conversationManager = require('./conversationManager');
 const issueManager = require('./issueManager');
-const telegramService = require('./telegramService');
+const messagingAdapter = require('./messagingAdapter'); // Platform abstraction
+const routingService = require('./routingService');     // Branch routing
 const permissionsManager = require('./permissionsManager');
-const { CONVERSATION_STEPS, SUPPORT_KEYWORDS, ISSUE_STATUS } = require('./constants');
+const statsService = require('./statsService');         // Statistics & metrics
+const { CONVERSATION_STEPS, SUPPORT_KEYWORDS, ISSUE_STATUS, BRANCHES, DEPARTMENTS } = require('./constants');
 
 class MessageHandler {
   /**
@@ -24,7 +30,13 @@ class MessageHandler {
 
     console.log(`[MessageHandler] Received message from ${userName} (${userId}): ${messageText}`);
 
-    // Check if this is a support staff command
+    // Check if this is a bot command (/stats, /open_issues, etc.)
+    if (messageText.startsWith('/')) {
+      await this.handleBotCommand(messageText, userId, chatId, userName);
+      return;
+    }
+
+    // Check if this is a support command (ACK, ONGOING, RESOLVED)
     if (this.isSupportCommand(messageText)) {
       await this.handleSupportCommand(messageText, userId, chatId, userName);
       return;
@@ -33,7 +45,7 @@ class MessageHandler {
     // Check if user can create issues
     const authCheck = permissionsManager.checkAuthorization(userId, 'create');
     if (!authCheck.authorized) {
-      await telegramService.sendMessage(chatId, authCheck.message);
+      await messagingAdapter.sendMessage(chatId, authCheck.message);
       return;
     }
 
@@ -64,6 +76,120 @@ class MessageHandler {
   }
 
   /**
+   * Handle bot commands (/stats, /open_issues, etc.)
+   * 
+   * Available commands:
+   * - /stats - Today's overall statistics
+   * - /stats <department> - Department-specific stats
+   * - /open_issues - All open issues by department
+   * 
+   * @param {string} text - Command text
+   * @param {string} userId - User ID
+   * @param {string} chatId - Chat ID
+   * @param {string} userName - User name
+   */
+  async handleBotCommand(text, userId, chatId, userName) {
+    const parts = text.trim().split(/\s+/);
+    const command = parts[0].toLowerCase();
+
+    console.log(`[MessageHandler] Bot command received: ${command}`);
+
+    switch (command) {
+      case '/stats':
+        await this.handleStatsCommand(parts, chatId);
+        break;
+
+      case '/open_issues':
+      case '/open':
+        await this.handleOpenIssuesCommand(chatId);
+        break;
+
+      case '/help':
+        await this.handleHelpCommand(chatId);
+        break;
+
+      default:
+        // Unknown command - ignore or show help
+        await messagingAdapter.sendMessage(
+          chatId,
+          '❓ Unknown command. Send /help for available commands.'
+        );
+    }
+  }
+
+  /**
+   * Handle /stats command
+   * @param {array} parts - Command parts
+   * @param {string} chatId - Chat ID
+   */
+  async handleStatsCommand(parts, chatId) {
+    if (parts.length === 1) {
+      // /stats - show overall today's stats
+      const message = statsService.formatTodayStatsMessage();
+      await messagingAdapter.sendMessage(chatId, message);
+    } else {
+      // /stats <department> - show department-specific stats
+      const deptInput = parts.slice(1).join(' ');
+      
+      // Try to match department (case-insensitive)
+      const matchedDept = Object.values(DEPARTMENTS).find(
+        dept => dept.toLowerCase() === deptInput.toLowerCase()
+      );
+
+      if (matchedDept) {
+        const message = statsService.formatDepartmentStatsMessage(matchedDept);
+        await messagingAdapter.sendMessage(chatId, message);
+      } else {
+        await messagingAdapter.sendMessage(
+          chatId,
+          `❌ Unknown department: "${deptInput}"\n\nAvailable departments:\n${Object.values(DEPARTMENTS).join(', ')}`
+        );
+      }
+    }
+  }
+
+  /**
+   * Handle /open_issues command
+   * @param {string} chatId - Chat ID
+   */
+  async handleOpenIssuesCommand(chatId) {
+    const message = statsService.formatOpenIssuesMessage();
+    await messagingAdapter.sendMessage(chatId, message);
+  }
+
+  /**
+   * Handle /help command
+   * @param {string} chatId - Chat ID
+   */
+  async handleHelpCommand(chatId) {
+    const helpMessage = `
+🤖 HELPDESK BOT COMMANDS
+
+📊 STATISTICS:
+/stats - Today's overall statistics
+/stats <department> - Department-specific stats
+  Example: /stats Sales
+
+📋 OPERATIONS:
+/open_issues - View all open issues by department
+
+🔧 SUPPORT STAFF ONLY:
+ACK <issue-id> - Acknowledge issue
+ONGOING <issue-id> - Mark as work in progress
+RESOLVED <issue-id> - Mark as resolved
+  Example: ACK ISSUE-20260107-0023
+
+❓ HELP:
+/help - Show this message
+
+━━━━━━━━━━━━━━━━━━━
+To create a new issue, just send any message to the bot.
+    `.trim();
+
+    await messagingAdapter.sendMessage(chatId, helpMessage);
+  }
+
+  /**
    * Handle support staff commands (ACK, ONGOING, RESOLVED)
    * @param {string} text - Command text
    * @param {string} userId - User ID
@@ -74,7 +200,7 @@ class MessageHandler {
     // Check if user is support staff
     const authCheck = permissionsManager.checkAuthorization(userId, 'update');
     if (!authCheck.authorized) {
-      await telegramService.sendMessage(chatId, authCheck.message);
+      await messagingAdapter.sendMessage(chatId, authCheck.message);
       return;
     }
 
@@ -82,7 +208,7 @@ class MessageHandler {
     const parts = text.trim().split(/\s+/);
     
     if (parts.length < 2) {
-      await telegramService.sendMessage(
+      await messagingAdapter.sendMessage(
         chatId,
         '❌ Invalid command format.\n\nUsage:\nACK ISSUE-ID\nONGOING ISSUE-ID\nRESOLVED ISSUE-ID'
       );
@@ -105,7 +231,7 @@ class MessageHandler {
         newStatus = ISSUE_STATUS.RESOLVED;
         break;
       default:
-        await telegramService.sendMessage(chatId, '❌ Unknown command.');
+        await messagingAdapter.sendMessage(chatId, '❌ Unknown command.');
         return;
     }
 
@@ -113,7 +239,7 @@ class MessageHandler {
     const issue = issueManager.getIssue(issueId);
     
     if (!issue) {
-      await telegramService.sendMessage(chatId, `❌ Issue not found: ${issueId}`);
+      await messagingAdapter.sendMessage(chatId, `❌ Issue not found: ${issueId}`);
       return;
     }
 
@@ -122,15 +248,15 @@ class MessageHandler {
 
     if (success) {
       // Confirm to support staff
-      await telegramService.sendMessage(
+      await messagingAdapter.sendMessage(
         chatId,
         `✅ Updated ${issueId}\nStatus: ${issue.status} → ${newStatus}`
       );
 
-      // Notify the employee who created the issue
-      await telegramService.notifyStatusUpdate(
-        issue.employee_id,
-        issueId,
+      // Notify all stakeholders (employee + central monitoring)
+      // Using routingService to handle multi-destination notifications
+      await routingService.notifyStatusUpdate(
+        issue,
         issue.status,
         newStatus,
         userName
@@ -138,12 +264,15 @@ class MessageHandler {
 
       console.log(`[MessageHandler] Status updated: ${issueId} → ${newStatus} by ${userName}`);
     } else {
-      await telegramService.sendMessage(chatId, '❌ Failed to update issue status.');
+      await messagingAdapter.sendMessage(chatId, '❌ Failed to update issue status.');
     }
   }
 
   /**
    * Start a new issue creation flow
+   * 
+   * CORRECTED FLOW: Ask for BRANCH first (routing key), then department (context)
+   * 
    * @param {string} userId - User ID
    * @param {string} chatId - Chat ID
    * @param {object} userProfile - User profile
@@ -151,15 +280,25 @@ class MessageHandler {
   async startNewIssue(userId, chatId, userProfile) {
     conversationManager.startConversation(userId, userProfile);
     
-    await telegramService.sendKeyboard(
+    await messagingAdapter.sendKeyboard(
       chatId,
-      '🏢 Welcome to the Helpdesk Bot!\n\nPlease select your department:',
-      telegramService.getDepartmentKeyboard()
+      '🏢 Welcome to the Helpdesk Bot!\n\nWhich branch/company are you from?',
+      this.getBranchKeyboard()
     );
   }
 
   /**
    * Process conversation step based on user input
+   * 
+   * CORRECTED FLOW:
+   * 1. BRANCH (routing key)
+   * 2. DEPARTMENT (context)
+   * 3. CATEGORY
+   * 4. URGENCY
+   * 5. DESCRIPTION
+   * 6. CONTACT
+   * 7. CONFIRMATION
+   * 
    * @param {string} userId - User ID
    * @param {string} chatId - Chat ID
    * @param {object} conversation - Conversation object
@@ -170,6 +309,10 @@ class MessageHandler {
     const currentStep = conversation.currentStep;
 
     switch (currentStep) {
+      case CONVERSATION_STEPS.BRANCH:
+        await this.handleBranchStep(userId, chatId, messageText);
+        break;
+
       case CONVERSATION_STEPS.DEPARTMENT:
         await this.handleDepartmentStep(userId, chatId, messageText);
         break;
@@ -195,14 +338,34 @@ class MessageHandler {
         break;
 
       default:
-        await telegramService.sendMessage(chatId, '❌ Unknown step. Let\'s start over.');
+        await messagingAdapter.sendMessage(chatId, '❌ Unknown step. Let\'s start over.');
         conversationManager.endConversation(userId);
         await this.startNewIssue(userId, chatId, userProfile);
     }
   }
 
   /**
-   * Handle department selection
+   * Handle branch selection (ROUTING KEY)
+   * This determines which support group will receive the issue
+   */
+  async handleBranchStep(userId, chatId, branch) {
+    conversationManager.updateConversation(
+      userId,
+      'branch',
+      branch,
+      CONVERSATION_STEPS.DEPARTMENT
+    );
+
+    await messagingAdapter.sendKeyboard(
+      chatId,
+      '📂 Please select your department:\n\n(This is for context only)',
+      messagingAdapter.getDepartmentKeyboard()
+    );
+  }
+
+  /**
+   * Handle department selection (CONTEXT ONLY)
+   * This is NOT used for routing - only stored as metadata
    */
   async handleDepartmentStep(userId, chatId, department) {
     conversationManager.updateConversation(
@@ -212,10 +375,10 @@ class MessageHandler {
       CONVERSATION_STEPS.CATEGORY
     );
 
-    await telegramService.sendKeyboard(
+    await messagingAdapter.sendKeyboard(
       chatId,
       '🔧 Please select the issue category:',
-      telegramService.getCategoryKeyboard()
+      messagingAdapter.getCategoryKeyboard()
     );
   }
 
@@ -230,10 +393,10 @@ class MessageHandler {
       CONVERSATION_STEPS.URGENCY
     );
 
-    await telegramService.sendKeyboard(
+    await messagingAdapter.sendKeyboard(
       chatId,
       '⚠️ Please select the urgency level:',
-      telegramService.getUrgencyKeyboard()
+      messagingAdapter.getUrgencyKeyboard()
     );
   }
 
@@ -248,7 +411,7 @@ class MessageHandler {
       CONVERSATION_STEPS.DESCRIPTION
     );
 
-    await telegramService.sendMessage(
+    await messagingAdapter.sendMessage(
       chatId,
       '📝 Please describe the issue in detail:\n\n(Type your description and send)'
     );
@@ -265,7 +428,7 @@ class MessageHandler {
       CONVERSATION_STEPS.CONTACT
     );
 
-    await telegramService.sendMessage(
+    await messagingAdapter.sendMessage(
       chatId,
       '📞 Who should we contact regarding this issue?\n\n(Enter name and contact info, or type "ME" to use your info)'
     );
@@ -290,7 +453,8 @@ class MessageHandler {
     const summary = `
 📋 ISSUE SUMMARY
 
-🏢 Department: ${data.department}
+🏢 Branch: ${data.branch}
+📂 Department: ${data.department}
 🔧 Category: ${data.category}
 ⚠️ Urgency: ${data.urgency}
 📞 Contact: ${data.contactPerson}
@@ -301,10 +465,10 @@ ${data.description}
 Is this correct?
     `.trim();
 
-    await telegramService.sendKeyboard(
+    await messagingAdapter.sendKeyboard(
       chatId,
       summary,
-      telegramService.getConfirmationKeyboard()
+      messagingAdapter.getConfirmationKeyboard()
     );
   }
 
@@ -318,12 +482,12 @@ Is this correct?
       await this.submitIssue(userId, chatId);
     } else if (upperResponse.includes('NO') || upperResponse === '❌ NO, CANCEL') {
       conversationManager.endConversation(userId);
-      await telegramService.sendMessage(
+      await messagingAdapter.sendMessage(
         chatId,
         '❌ Issue creation cancelled.\n\nSend any message to start a new issue.'
       );
     } else {
-      await telegramService.sendMessage(
+      await messagingAdapter.sendMessage(
         chatId,
         'Please click one of the buttons: ✅ Yes, Submit or ❌ No, Cancel'
       );
@@ -333,21 +497,32 @@ Is this correct?
   /**
    * Submit the issue to the system
    */
+  /**
+   * Submit the issue to the system
+   * 
+   * AUTOMATED TICKET CREATION:
+   * - Bot is the authoritative ticket creator
+   * - No manual encoding or approval needed
+   * - Department representatives are NOT required for ticket creation
+   * - Ticket is immediately created and routed to appropriate groups
+   */
   async submitIssue(userId, chatId) {
     const conversation = conversationManager.getConversation(userId);
     
     if (!conversation) {
-      await telegramService.sendMessage(chatId, '❌ Session expired. Please start over.');
+      await messagingAdapter.sendMessage(chatId, '❌ Session expired. Please start over.');
       return;
     }
 
     const data = conversation.data;
 
-    // Create issue
+    // BOT CREATES TICKET IMMEDIATELY (no approval workflow)
+    // This is the single source of truth for ticket creation
     const issue = issueManager.createIssue({
       employeeId: userId,
       employeeName: conversation.userName,
-      department: data.department,
+      branch: data.branch,           // ROUTING KEY
+      department: data.department,   // METADATA
       category: data.category,
       urgency: data.urgency,
       description: data.description,
@@ -357,16 +532,32 @@ Is this correct?
     // End conversation
     conversationManager.endConversation(userId);
 
-    // Notify employee
-    await telegramService.sendMessage(
+    // Confirm to employee
+    await messagingAdapter.sendMessage(
       chatId,
       `✅ Issue created successfully!\n\n📋 Issue ID: ${issue.issueId}\n\nOur support team has been notified and will respond soon.\n\nYou will receive status updates automatically.`
     );
 
-    // Send to support group
-    await telegramService.sendIssueToSupportGroup(issue);
+    // ROUTE TO APPROPRIATE GROUPS
+    // Uses routing service for intelligent multi-group delivery:
+    // 1. Branch-specific action group (support can respond)
+    // 2. Central monitoring group (visibility only)
+    await routingService.routeIssue(issue);
 
     console.log(`[MessageHandler] Issue ${issue.issueId} submitted by ${conversation.userName}`);
+  }
+
+  /**
+   * Get branch selection keyboard
+   * @returns {array} - Button configuration array
+   */
+  getBranchKeyboard() {
+    return Object.values(BRANCHES).map(branch => ({
+      text: branch,
+      value: branch,
+      columns: 3,
+      rows: 1,
+    }));
   }
 }
 

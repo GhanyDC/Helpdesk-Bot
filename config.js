@@ -20,7 +20,28 @@ module.exports = {
 
   // Support Group Configuration
   support: {
+    // Legacy single group (backward compatibility)
     groupId: process.env.SUPPORT_GROUP_ID,
+
+    // BRANCH-BASED SUPPORT GROUPS (CORRECT MODEL)
+    // Each BRANCH (not department) has its own support group
+    // Branch = Physical location / company (JHQ, CHQ, GS)
+    // Each group contains: support staff + all dept reps for that branch
+    // Routing logic: issue.branch → corresponding support group
+    branchGroups: {
+      'JHQ': process.env.SUPPORT_GROUP_JHQ,
+      'CHQ': process.env.SUPPORT_GROUP_CHQ,
+      'GS': process.env.SUPPORT_GROUP_GS,
+    },
+
+    // Central monitoring group (management oversight - read-only visibility)
+    // This group receives copies of ALL issues across all branches
+    // Purpose: Executive visibility, trend analysis, resource allocation
+    // Cannot update status (visibility only)
+    centralMonitoringGroup: process.env.CENTRAL_MONITORING_GROUP,
+
+    // Feature flag: Enable/disable central monitoring
+    enableCentralMonitoring: process.env.ENABLE_CENTRAL_MONITORING === 'true',
   },
 
   // Database Configuration
