@@ -173,7 +173,7 @@ class StatsService {
 
   /**
    * Get statistics for a specific BRANCH (CORRECTED)
-   * @param {string} branch - Branch name (JHQ/CHQ/GS)
+   * @param {string} branch - Branch name (JHQ/TRK/GS/IPIL)
    * @returns {object} - Branch statistics
    */
   getBranchStats(branch) {
@@ -284,7 +284,7 @@ class StatsService {
 
   /**
    * Format branch-specific statistics (CORRECTED)
-   * @param {string} branch - Branch name (JHQ/CHQ/GS)
+   * @param {string} branch - Branch name (JHQ/TRK/GS/IPIL)
    * @returns {string} - Formatted message
    */
   formatBranchStatsMessage(branch) {

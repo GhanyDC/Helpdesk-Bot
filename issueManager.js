@@ -110,7 +110,7 @@ class IssueManager {
    * Create a new issue
    * 
    * IMPORTANT: Requires both branch (routing) and department (context)
-   * - branch: JHQ/CHQ/GS → determines which support group receives the issue
+   * - branch: JHQ/TRK/GS/IPIL → determines which support group receives the issue
    * - department: Accounting/Sales/HR/etc → stored as metadata for context
    * 
    * @param {object} issueData - Issue information (must include branch + department)

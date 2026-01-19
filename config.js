@@ -25,13 +25,14 @@ module.exports = {
 
     // BRANCH-BASED SUPPORT GROUPS (CORRECT MODEL)
     // Each BRANCH (not department) has its own support group
-    // Branch = Physical location / company (JHQ, CHQ, GS)
+    // Branch = Physical location / company (JHQ, TRK, GS, IPIL)
     // Each group contains: support staff + all dept reps for that branch
     // Routing logic: issue.branch → corresponding support group
     branchGroups: {
       'JHQ': process.env.SUPPORT_GROUP_JHQ,
-      'CHQ': process.env.SUPPORT_GROUP_CHQ,
+      'TRK': process.env.SUPPORT_GROUP_TRK,
       'GS': process.env.SUPPORT_GROUP_GS,
+      'IPIL': process.env.SUPPORT_GROUP_IPIL,
     },
 
     // Central monitoring group (management oversight - read-only visibility)

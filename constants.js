@@ -3,7 +3,7 @@
  * Defines all conversation steps, issue categories, and status values
  * 
  * IMPORTANT ORGANIZATIONAL STRUCTURE:
- * - BRANCHES = Physical locations / companies (JHQ, CHQ, GS)
+ * - BRANCHES = Physical locations / companies (JHQ, TRK, GS, IPIL)
  *   → Used for ROUTING tickets to support groups
  *   → Each branch has ONE support group
  * 
@@ -29,8 +29,9 @@ const CONVERSATION_STEPS = {
 // Each branch has its own support group
 const BRANCHES = {
   JHQ: 'JHQ',   // Main Head Office
-  CHQ: 'CHQ',   // Regional Office
+  TRK: 'TRK',   // Regional Office
   GS: 'GS',     // Service Center
+  IPIL: 'IPIL', // IPIL Office
 };
 
 // Department Options (CONTEXT ONLY - NOT FOR ROUTING)

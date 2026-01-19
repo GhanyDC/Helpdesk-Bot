@@ -7,7 +7,7 @@
  * Routes issues to appropriate support groups based on BRANCH (not department).
  * 
  * IMPORTANT DISTINCTION:
- * - BRANCH (JHQ, CHQ, GS) = Company location → ROUTING KEY
+ * - BRANCH (JHQ, TRK, GS, IPIL) = Company location → ROUTING KEY
  * - DEPARTMENT (Accounting, HR, Sales, etc.) = Functional division → METADATA ONLY
  * 
  * Why This Exists:
@@ -16,7 +16,7 @@
  * - Department info is captured for context but doesn't affect routing
  * 
  * Routing Strategy:
- * 1. Read issue.branch (JHQ/CHQ/GS)
+ * 1. Read issue.branch (JHQ/TRK/GS/IPIL)
  * 2. Route to corresponding SUPPORT_GROUP_<BRANCH>
  * 3. Falls back to SUPPORT_GROUP_ID if branch group not configured
  * 4. Optionally forwards visibility copy to central monitoring
@@ -70,7 +70,7 @@ class RoutingService {
    * Send issue to the BRANCH-specific action group
    * This group can take action (ACK, ONGOING, RESOLVED)
    * 
-   * CORRECTED: Uses issue.branch (JHQ/CHQ/GS), NOT issue.department
+   * CORRECTED: Uses issue.branch (JHQ/TRK/GS/IPIL), NOT issue.department
    * 
    * @param {object} issue - Issue object
    */
@@ -202,7 +202,7 @@ Created: ${new Date(issue.createdAt).toLocaleString()}
    * Get statistics for a BRANCH today (CORRECTED)
    * Used to provide context in monitoring messages
    * 
-   * @param {string} branch - Branch name (JHQ/CHQ/GS)
+   * @param {string} branch - Branch name (JHQ/TRK/GS/IPIL)
    * @returns {object} - Stats object {total, open, resolved}
    */
   getBranchStatsToday(branch) {
