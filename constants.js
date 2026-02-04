@@ -65,17 +65,18 @@ const URGENCY_LEVELS = {
 
 // Issue Status Values
 const ISSUE_STATUS = {
-  NEW: 'NEW',
-  ACKNOWLEDGED: 'ACKNOWLEDGED',
-  ONGOING: 'ONGOING',
-  RESOLVED: 'RESOLVED',
+  PENDING: 'pending',
+  IN_PROGRESS: 'in-progress',
+  RESOLVED: 'resolved',
+  CLOSED: 'closed',
 };
 
 // Support Staff Keywords
 const SUPPORT_KEYWORDS = {
-  ACK: 'ACK',
-  ONGOING: 'ONGOING',
-  RESOLVED: 'RESOLVED',
+  PENDING: 'pending',
+  IN_PROGRESS: 'in-progress',
+  RESOLVED: 'resolved',
+  CLOSED: 'closed',
 };
 
 module.exports = {

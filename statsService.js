@@ -42,21 +42,21 @@ class StatsService {
     });
 
     const total = todayIssues.length;
-    const resolved = todayIssues.filter(i => i.status === 'RESOLVED').length;
-    const ongoing = todayIssues.filter(i => i.status === 'ONGOING').length;
-    const acknowledged = todayIssues.filter(i => i.status === 'ACKNOWLEDGED').length;
-    const newIssues = todayIssues.filter(i => i.status === 'NEW').length;
+    const resolved = todayIssues.filter(i => i.status === 'resolved').length;
+    const closed = todayIssues.filter(i => i.status === 'closed').length;
+    const inProgress = todayIssues.filter(i => i.status === 'in-progress').length;
+    const pending = todayIssues.filter(i => i.status === 'pending').length;
     const open = total - resolved;
 
     return {
       date: today,
       total,
-      new: newIssues,
-      acknowledged,
-      ongoing,
+      pending,
+      inProgress,
       resolved,
+      closed,
       open,
-      resolutionRate: total > 0 ? Math.round((resolved / total) * 100) : 0,
+      resolutionRate: total > 0 ? Math.round(((resolved + closed) / total) * 100) : 0,
     };
   }
 
@@ -80,16 +80,17 @@ class StatsService {
       });
 
       const total = branchIssues.length;
-      const resolved = branchIssues.filter(i => i.status === 'RESOLVED').length;
-      const open = total - resolved;
+      const resolved = branchIssues.filter(i => i.status === 'resolved').length;
+      const closed = branchIssues.filter(i => i.status === 'closed').length;
+      const open = total - resolved - closed;
 
       if (total > 0) {
         stats.push({
           branch,
           total,
           open,
-          resolved,
-          resolutionRate: Math.round((resolved / total) * 100),
+          resolved: resolved + closed,
+          resolutionRate: Math.round(((resolved + closed) / total) * 100),
         });
       }
     });
@@ -116,7 +117,7 @@ class StatsService {
 
     urgencyLevels.forEach(level => {
       const issues = todayIssues.filter(i => i.urgency === level);
-      const open = issues.filter(i => i.status !== 'RESOLVED').length;
+      const open = issues.filter(i => i.status !== 'resolved' && i.status !== 'closed').length;
       
       stats[level] = {
         total: issues.length,
@@ -134,7 +135,7 @@ class StatsService {
    */
   getOpenIssues() {
     const allIssues = issueManager.getAllIssues({});
-    return allIssues.filter(i => i.status !== 'RESOLVED');
+    return allIssues.filter(i => i.status !== 'resolved' && i.status !== 'closed');
   }
 
   /**
@@ -188,14 +189,14 @@ class StatsService {
     });
 
     // All time open issues
-    const openIssues = branchIssues.filter(i => i.status !== 'RESOLVED');
+    const openIssues = branchIssues.filter(i => i.status !== 'resolved' && i.status !== 'closed');
 
     return {
       branch,
       today: {
         total: todayIssues.length,
-        resolved: todayIssues.filter(i => i.status === 'RESOLVED').length,
-        open: todayIssues.filter(i => i.status !== 'RESOLVED').length,
+        resolved: todayIssues.filter(i => i.status === 'resolved' || i.status === 'closed').length,
+        open: todayIssues.filter(i => i.status !== 'resolved' && i.status !== 'closed').length,
       },
       allTime: {
         total: branchIssues.length,
@@ -320,10 +321,9 @@ class StatsService {
     message += `OVERALL PERFORMANCE\n`;
     message += `═══════════════════════════════════════\n`;
     message += `Total Issues: ${overall.total}\n`;
-    message += `├─ Resolved: ${overall.resolved} (${overall.resolutionRate}% resolution rate)\n`;
-    message += `├─ Ongoing: ${overall.ongoing}\n`;
-    message += `├─ Acknowledged: ${overall.acknowledged}\n`;
-    message += `└─ New: ${overall.new}\n\n`;
+    message += `├─ Resolved/Closed: ${overall.resolved + overall.closed} (${overall.resolutionRate}% resolution rate)\n`;
+    message += `├─ In Progress: ${overall.inProgress}\n`;
+    message += `└─ Pending: ${overall.pending}\n\n`;
 
     if (branchStats.length > 0) {
       message += `═══════════════════════════════════════\n`;

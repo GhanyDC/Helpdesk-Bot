@@ -84,15 +84,20 @@ async function handleMessage(message) {
   const chatId = message.chat.id;
   const userId = message.from.id.toString();
   const userName = message.from.first_name || 'User';
+  const chatType = message.chat.type; // 'private', 'group', 'supergroup', or 'channel'
+  const isGroupChat = chatType === 'group' || chatType === 'supergroup';
   
   // Handle different message types
   if (message.text) {
     // Check for /start command
     if (message.text === '/start') {
-      await telegramService.sendMessage(
-        chatId,
-        `👋 Hello ${userName}!\n\nWelcome to the ${config.telegram.botName}.\n\nI'm here to help you submit and track helpdesk issues.\n\n📋 To create an issue: Send any message\n📊 For statistics: Send /stats\n❓ For help: Send /help`
-      );
+      // Only respond to /start in private chats
+      if (!isGroupChat) {
+        await telegramService.sendMessage(
+          chatId,
+          `👋 Hello ${userName}!\n\nWelcome to the ${config.telegram.botName}.\n\nI'm here to help you submit and track helpdesk issues.\n\n📋 To create an issue: Send any message\n📊 For statistics: Send /stats\n❓ For help: Send /help`
+        );
+      }
       return;
     }
     
@@ -101,6 +106,7 @@ async function handleMessage(message) {
       id: userId,
       name: userName,
       chatId: chatId,
+      isGroup: isGroupChat,
     };
     
     try {

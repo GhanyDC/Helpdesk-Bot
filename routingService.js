@@ -68,7 +68,7 @@ class RoutingService {
 
   /**
    * Send issue to the BRANCH-specific action group
-   * This group can take action (ACK, ONGOING, RESOLVED)
+   * This group can take action (/status commands)
    * 
    * CORRECTED: Uses issue.branch (JHQ/TRK/GS/IPIL), NOT issue.department
    * 
@@ -154,9 +154,10 @@ Created: ${new Date(issue.createdAt).toLocaleString()}
 
 ━━━━━━━━━━━━━━━━━━━
 To update status, reply:
-ACK ${issue.issueId}
-ONGOING ${issue.issueId}
-RESOLVED ${issue.issueId}
+/status ${issue.issueId} pending
+/status ${issue.issueId} in-progress
+/status ${issue.issueId} resolved
+/status ${issue.issueId} closed
     `.trim();
   }
 
@@ -254,8 +255,8 @@ Created: ${new Date(issue.createdAt).toLocaleString()}
     if (this.enableCentralMonitoring && this.centralMonitoringGroup) {
       let updateMessage = '';
       
-      // For RESOLVED status, send detailed branch metrics
-      if (newStatus === 'RESOLVED') {
+      // For resolved/closed status, send detailed branch metrics
+      if (newStatus === 'resolved' || newStatus === 'closed') {
         const branchStats = this.getBranchStatsToday(issue.branch);
         const yesterdayStats = this.getBranchStatsYesterday(issue.branch);
         const avgResponseTime = this.getAverageResponseTime(issue.branch);
@@ -355,7 +356,7 @@ Created: ${new Date(issue.createdAt).toLocaleString()}
       const todayIssues = allIssues.filter(issue => {
         const issueDate = issue.created_at.split(' ')[0];
         const issueBranch = issue.branch || null;
-        return issueDate === today && issueBranch === branch && issue.status !== 'NEW';
+        return issueDate === today && issueBranch === branch && issue.status !== 'pending';
       });
 
       if (todayIssues.length === 0) {

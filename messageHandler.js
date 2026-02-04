@@ -27,18 +27,30 @@ class MessageHandler {
     const chatId = userProfile.chatId;
     const userName = userProfile.name || 'User';
     const messageText = message.text.trim();
+    const isGroupChat = userProfile.isGroup || false;
 
-    console.log(`[MessageHandler] Received message from ${userName} (${userId}): ${messageText}`);
+    console.log(`[MessageHandler] Received message from ${userName} (${userId}) in ${isGroupChat ? 'GROUP' : 'PRIVATE'}: ${messageText}`);
 
-    // Check if this is a bot command (/stats, /open_issues, etc.)
-    if (messageText.startsWith('/')) {
-      await this.handleBotCommand(messageText, userId, chatId, userName);
+    // Check if this is a support command (/status) - MUST CHECK BEFORE OTHER COMMANDS
+    if (this.isSupportCommand(messageText)) {
+      if (!isGroupChat) {
+        await messagingAdapter.sendMessage(chatId, '❌ Status updates can only be done in the support group.\n\nTo create a ticket, just send me a regular message.');
+        return;
+      }
+      await this.handleSupportCommand(messageText, userId, chatId, userName);
       return;
     }
 
-    // Check if this is a support command (ACK, ONGOING, RESOLVED)
-    if (this.isSupportCommand(messageText)) {
-      await this.handleSupportCommand(messageText, userId, chatId, userName);
+    // Check if this is a bot command (/stats, /open_issues, etc.)
+    if (messageText.startsWith('/')) {
+      await this.handleBotCommand(messageText, userId, chatId, userName, isGroupChat);
+      return;
+    }
+
+    // Ticket creation only allowed in PRIVATE CHATS
+    if (isGroupChat) {
+      // Ignore regular messages in groups (only respond to commands)
+      console.log(`[MessageHandler] Ignoring non-command message in group chat`);
       return;
     }
 
@@ -67,12 +79,8 @@ class MessageHandler {
    * @returns {boolean}
    */
   isSupportCommand(text) {
-    const upperText = text.toUpperCase();
-    return (
-      upperText.startsWith(SUPPORT_KEYWORDS.ACK) ||
-      upperText.startsWith(SUPPORT_KEYWORDS.ONGOING) ||
-      upperText.startsWith(SUPPORT_KEYWORDS.RESOLVED)
-    );
+    const lowerText = text.toLowerCase().trim();
+    return lowerText.startsWith('/status');
   }
 
   /**
@@ -87,8 +95,9 @@ class MessageHandler {
    * @param {string} userId - User ID
    * @param {string} chatId - Chat ID
    * @param {string} userName - User name
+   * @param {boolean} isGroupChat - Whether message is from a group
    */
-  async handleBotCommand(text, userId, chatId, userName) {
+  async handleBotCommand(text, userId, chatId, userName, isGroupChat = false) {
     const parts = text.trim().split(/\s+/);
     const command = parts[0].toLowerCase();
 
@@ -174,10 +183,11 @@ class MessageHandler {
 /open_issues - View all open issues by department
 
 🔧 SUPPORT STAFF ONLY:
-ACK <issue-id> - Acknowledge issue
-ONGOING <issue-id> - Mark as work in progress
-RESOLVED <issue-id> - Mark as resolved
-  Example: ACK ISSUE-20260107-0023
+/status <issue-id> pending - Mark as pending
+/status <issue-id> in-progress - Mark as in progress
+/status <issue-id> resolved - Mark as resolved
+/status <issue-id> closed - Mark as closed
+  Example: /status ISSUE-20260107-0023 in-progress
 
 ❓ HELP:
 /help - Show this message
@@ -190,7 +200,7 @@ To create a new issue, just send any message to the bot.
   }
 
   /**
-   * Handle support staff commands (ACK, ONGOING, RESOLVED)
+   * Handle support staff commands (/status)
    * @param {string} text - Command text
    * @param {string} userId - User ID
    * @param {string} chatId - Chat ID
@@ -204,36 +214,31 @@ To create a new issue, just send any message to the bot.
       return;
     }
 
-    // Parse command: "ACK ISSUE-20260105-0001" or "ONGOING ISSUE-20260105-0001"
+    // Parse command: "/status ISSUE-20260105-0001 in-progress"
     const parts = text.trim().split(/\s+/);
     
-    if (parts.length < 2) {
+    if (parts.length < 3) {
       await messagingAdapter.sendMessage(
         chatId,
-        '❌ Invalid command format.\n\nUsage:\nACK ISSUE-ID\nONGOING ISSUE-ID\nRESOLVED ISSUE-ID'
+        '❌ Invalid command format.\n\nUsage:\n/status ISSUE-ID pending\n/status ISSUE-ID in-progress\n/status ISSUE-ID resolved\n/status ISSUE-ID closed'
       );
       return;
     }
 
-    const command = parts[0].toUpperCase();
     const issueId = parts[1];
+    const statusInput = parts[2].toLowerCase();
 
-    // Determine new status
-    let newStatus;
-    switch (command) {
-      case SUPPORT_KEYWORDS.ACK:
-        newStatus = ISSUE_STATUS.ACKNOWLEDGED;
-        break;
-      case SUPPORT_KEYWORDS.ONGOING:
-        newStatus = ISSUE_STATUS.ONGOING;
-        break;
-      case SUPPORT_KEYWORDS.RESOLVED:
-        newStatus = ISSUE_STATUS.RESOLVED;
-        break;
-      default:
-        await messagingAdapter.sendMessage(chatId, '❌ Unknown command.');
-        return;
+    // Validate status
+    const validStatuses = Object.values(ISSUE_STATUS);
+    if (!validStatuses.includes(statusInput)) {
+      await messagingAdapter.sendMessage(
+        chatId,
+        `❌ Invalid status. Valid statuses: ${validStatuses.join(', ')}`
+      );
+      return;
     }
+
+    const newStatus = statusInput;
 
     // Get issue to verify it exists
     const issue = issueManager.getIssue(issueId);

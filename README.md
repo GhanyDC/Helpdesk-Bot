@@ -17,15 +17,16 @@ A production-ready Telegram bot for internal helpdesk support requests. Employee
 ✅ **Automated Issue Management**
 - Unique auto-generated Issue IDs (format: `ISSUE-YYYYMMDD-XXXX`)
 - SQLite database for persistent storage
-- Status tracking (NEW → ACKNOWLEDGED → ONGOING → RESOLVED)
+- Status tracking (pending → in-progress → resolved → closed)
 - Full audit trail of status changes
 
 ✅ **Central Support Group Integration**
 - New issues automatically posted to support group
-- Support staff update status using keywords:
-  - `ACK ISSUE-ID` - Acknowledge issue
-  - `ONGOING ISSUE-ID` - Mark as work in progress
-  - `RESOLVED ISSUE-ID` - Mark as resolved
+- Support staff update status using commands:
+  - `/status ISSUE-ID pending` - Mark as pending
+  - `/status ISSUE-ID in-progress` - Mark as in progress
+  - `/status ISSUE-ID resolved` - Mark as resolved
+  - `/status ISSUE-ID closed` - Mark as closed
 
 ✅ **Smart Notifications**
 - Employees receive automatic status updates
@@ -267,7 +268,7 @@ CREATE TABLE issues (
   urgency TEXT NOT NULL,               -- Low/Medium/High/Critical
   description TEXT NOT NULL,           -- Issue description
   contact_person TEXT,                 -- Contact person name
-  status TEXT NOT NULL,                -- NEW/ACKNOWLEDGED/ONGOING/RESOLVED
+  status TEXT NOT NULL,                -- pending/in-progress/resolved/closed
   created_at DATETIME,                 -- Creation timestamp
   updated_at DATETIME,                 -- Last update timestamp
   resolved_at DATETIME                 -- Resolution timestamp

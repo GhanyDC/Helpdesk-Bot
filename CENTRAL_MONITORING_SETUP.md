@@ -14,8 +14,8 @@ The Central Monitoring Group provides **read-only visibility** for management/ex
    - Today's branch statistics included
 
 2. **Status Update Notifications**
-   - ACK, ONGOING status changes (simple notification)
-   - **RESOLVED** status (detailed metrics report):
+   - pending, in-progress status changes (simple notification)
+   - **resolved/closed** status (detailed metrics report):
      ```
      📊 JHQ BRANCH METRICS TODAY:
      ├─ Total Issues: 23 (↑ from yesterday: 18)
@@ -30,7 +30,7 @@ The Central Monitoring Group provides **read-only visibility** for management/ex
    - Critical alerts
 
 ### What Central Monitoring CANNOT Do:
-- ❌ Update issue status (ACK, ONGOING, RESOLVED commands won't work)
+- ❌ Update issue status (/status commands won't work)
 - ❌ Send messages (if configured as read-only in Telegram)
 - ❌ Interfere with support staff workflows
 
@@ -102,11 +102,11 @@ node server.js
    - ✅ Central Monitoring Group (read-only notification)
 
 ### Test 2: Status Update
-1. Support staff marks issue as ONGOING in JHQ Support Group
+1. Support staff marks issue as in-progress in JHQ Support Group
 2. Verify update appears in Central Monitoring Group
 
 ### Test 3: Resolution Metrics
-1. Support staff marks issue as RESOLVED
+1. Support staff marks issue as resolved
 2. Verify Central Monitoring Group receives detailed report:
    ```
    ✅ ISSUE RESOLVED
@@ -132,7 +132,8 @@ node server.js
         Issue #42, IT Department, High urgency
 
 [09:23] 📊 STATUS UPDATE
-        Issue #42: NEW → ACKNOWLEDGED
+        Issue #42: pending → in-progress
+        Branch: JHQ | Updated by: John Doe
 
 [09:45] ✅ ISSUE RESOLVED
         Issue #42
@@ -171,8 +172,8 @@ node server.js
 
 **Too many notifications?**
 - This is working as designed - every issue and resolution sends a notification
-- Consider disabling for NEW/ACK/ONGOING updates if too noisy
-- Keep RESOLVED notifications for metrics visibility
+- Consider disabling for pending/in-progress updates if too noisy
+- Keep resolved/closed notifications for metrics visibility
 
 ---
 

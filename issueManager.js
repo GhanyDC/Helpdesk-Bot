@@ -137,18 +137,18 @@ class IssueManager {
         issueData.urgency,
         issueData.description,
         issueData.contactPerson || issueData.employeeName,
-        ISSUE_STATUS.NEW
+        ISSUE_STATUS.PENDING
       );
 
       // Log initial status
-      this.logStatusChange(issueId, null, ISSUE_STATUS.NEW, 'SYSTEM', 'System');
+      this.logStatusChange(issueId, null, ISSUE_STATUS.PENDING, 'SYSTEM', 'System');
 
       console.log(`[IssueManager] Created issue: ${issueId} (Branch: ${issueData.branch}, Dept: ${issueData.department})`);
       
       return {
         issueId,
         ...issueData,
-        status: ISSUE_STATUS.NEW,
+        status: ISSUE_STATUS.PENDING,
         createdAt: new Date(),
       };
     } catch (error) {

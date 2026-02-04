@@ -210,7 +210,7 @@ Notifications sent
 ### Status Update Flow
 
 ```
-Support staff sends: "ACK ISSUE-20260107-0023"
+Support staff sends: "/status ISSUE-20260107-0023 in-progress"
   ↓
 messageHandler validates
   ├─ Is user in SUPPORT_STAFF_IDS?
@@ -243,14 +243,14 @@ routingService.notifyStatusUpdate()
 📝 Description:
 Cannot access client portal
 
-Status: NEW
+Status: pending
 Created: 1/7/2026, 2:30:00 PM
 
 ━━━━━━━━━━━━━━━━━━━
 To update status, reply:
-ACK ISSUE-20260107-0023
-ONGOING ISSUE-20260107-0023
-RESOLVED ISSUE-20260107-0023
+/status ISSUE-20260107-0023 pending
+/status ISSUE-20260107-0023 in-progress
+/status ISSUE-20260107-0023 resolved
 ```
 
 ### Monitoring Message (Central Monitoring Group)
@@ -300,7 +300,7 @@ Created: 1/7/2026, 2:30:00 PM
    - Monitoring copy to central group (labeled)
 
 ### ✅ Status Update Test
-1. Support staff sends: `ACK ISSUE-20260107-0023`
+1. Support staff sends: `/status ISSUE-20260107-0023 in-progress`
 2. **Expected:**
    - Database updated
    - Confirmation to support group
@@ -310,7 +310,7 @@ Created: 1/7/2026, 2:30:00 PM
 ### ✅ Department Rep Visibility Test
 1. Add department rep to Sales support group (don't add to SUPPORT_STAFF_IDS)
 2. Dept rep sees new issue notification
-3. Dept rep tries: `ACK ISSUE-20260107-0023`
+3. Dept rep tries: `/status ISSUE-20260107-0023 in-progress`
 4. **Expected:** Bot rejects (⛔ Only support staff can update)
 
 ---
