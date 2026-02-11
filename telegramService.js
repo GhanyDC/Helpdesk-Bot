@@ -160,14 +160,19 @@ RESOLVED ${issue.issueId}
    */
   async notifyStatusUpdate(chatId, issueId, oldStatus, newStatus, updatedBy) {
     const statusEmoji = {
-      NEW: '🆕',
-      ACKNOWLEDGED: '👍',
-      ONGOING: '🔧',
-      RESOLVED: '✅',
+      'pending': '⏳',
+      'in-process': '🔧',
+      'resolved': '✅',
+      'resolved-with-issues': '⚠️',
+      'confirmed': '✅',
+      'cancelled-staff': '❌',
+      'cancelled-user': '❌',
     };
 
+    const emoji = statusEmoji[newStatus] || '📋';
+
     const message = `
-${statusEmoji[newStatus]} ISSUE STATUS UPDATE
+${emoji} ISSUE STATUS UPDATE
 
 Issue ID: ${issueId}
 Status: ${oldStatus} → ${newStatus}
@@ -186,10 +191,13 @@ ${this.getStatusMessage(newStatus)}
    */
   getStatusMessage(status) {
     const messages = {
-      NEW: 'Your issue has been submitted and is awaiting review.',
-      ACKNOWLEDGED: 'Your issue has been acknowledged by support staff.',
-      ONGOING: 'Support is actively working on your issue.',
-      RESOLVED: 'Your issue has been resolved. Please verify and let us know if you need further assistance.',
+      'pending': 'Your issue is awaiting review.',
+      'in-process': 'Support is actively working on your issue.',
+      'resolved': 'Your issue has been marked as resolved.',
+      'resolved-with-issues': 'Your issue has been resolved with some remaining issues noted.',
+      'confirmed': 'Your issue has been confirmed as resolved.',
+      'cancelled-staff': 'Your issue has been cancelled by support staff.',
+      'cancelled-user': 'Your issue has been cancelled.',
     };
 
     return messages[status] || 'Issue status updated.';
@@ -248,6 +256,69 @@ ${this.getStatusMessage(newStatus)}
       { text: '✅ Yes, Submit', value: 'YES', columns: 3 },
       { text: '❌ No, Cancel', value: 'NO', columns: 3 },
     ];
+  }
+
+  /**
+   * Send a message with inline keyboard buttons (callback buttons)
+   * Unlike reply keyboards, inline keyboards are attached to the message itself
+   * @param {string} chatId - Chat ID
+   * @param {string} text - Message text
+   * @param {array} inlineKeyboard - Array of rows, each row is array of {text, callback_data}
+   * @returns {object} - Sent message object (includes message_id)
+   */
+  async sendInlineKeyboard(chatId, text, inlineKeyboard) {
+    try {
+      const options = {
+        reply_markup: {
+          inline_keyboard: inlineKeyboard
+        }
+      };
+      const sentMessage = await this.bot.sendMessage(chatId, text, options);
+      console.log(`[TelegramService] Sent inline keyboard to ${chatId}`);
+      return sentMessage;
+    } catch (error) {
+      console.error('[TelegramService] Error sending inline keyboard:', error);
+    }
+  }
+
+  /**
+   * Answer a callback query (acknowledges inline button press)
+   * @param {string} callbackQueryId - Callback query ID
+   * @param {string} text - Toast/alert text to show
+   * @param {boolean} showAlert - If true, shows modal alert instead of toast
+   */
+  async answerCallbackQuery(callbackQueryId, text, showAlert = false) {
+    try {
+      await this.bot.answerCallbackQuery(callbackQueryId, { text, show_alert: showAlert });
+    } catch (error) {
+      console.error('[TelegramService] Error answering callback query:', error);
+    }
+  }
+
+  /**
+   * Edit an existing message's text and/or inline keyboard
+   * Used to update ticket messages after status changes
+   * @param {string} chatId - Chat ID
+   * @param {number} messageId - Message ID to edit
+   * @param {string} text - New message text
+   * @param {array|null} inlineKeyboard - New inline keyboard (null to remove buttons)
+   */
+  async editMessageText(chatId, messageId, text, inlineKeyboard = null) {
+    try {
+      const options = {
+        chat_id: chatId,
+        message_id: messageId,
+      };
+      if (inlineKeyboard) {
+        options.reply_markup = { inline_keyboard: inlineKeyboard };
+      } else {
+        options.reply_markup = { inline_keyboard: [] };
+      }
+      await this.bot.editMessageText(text, options);
+      console.log(`[TelegramService] Edited message ${messageId} in ${chatId}`);
+    } catch (error) {
+      console.error('[TelegramService] Error editing message:', error);
+    }
   }
 }
 

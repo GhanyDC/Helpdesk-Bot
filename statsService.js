@@ -24,7 +24,17 @@
  */
 
 const issueManager = require('./issueManager');
-const { BRANCHES } = require('./constants');  // CORRECTED: Use BRANCHES not DEPARTMENTS
+const { BRANCHES, TERMINAL_STATUSES } = require('./constants');
+
+// Helper: check if a status counts as "resolved/closed" for stats
+function isClosedStatus(status) {
+  return ['resolved', 'resolved-with-issues', 'confirmed', 'closed', 'cancelled-staff', 'cancelled-user'].includes(status);
+}
+
+// Helper: check if a status counts as "open" for stats
+function isOpenStatus(status) {
+  return !isClosedStatus(status);
+}
 
 class StatsService {
   /**
@@ -42,21 +52,25 @@ class StatsService {
     });
 
     const total = todayIssues.length;
-    const resolved = todayIssues.filter(i => i.status === 'resolved').length;
-    const closed = todayIssues.filter(i => i.status === 'closed').length;
-    const inProgress = todayIssues.filter(i => i.status === 'in-progress').length;
+    const resolved = todayIssues.filter(i => i.status === 'resolved' || i.status === 'resolved-with-issues').length;
+    const confirmed = todayIssues.filter(i => i.status === 'confirmed').length;
+    const cancelled = todayIssues.filter(i => i.status === 'cancelled-staff' || i.status === 'cancelled-user').length;
+    const closed = todayIssues.filter(i => i.status === 'closed').length; // legacy
+    const inProgress = todayIssues.filter(i => i.status === 'in-process').length;
     const pending = todayIssues.filter(i => i.status === 'pending').length;
-    const open = total - resolved;
+    const open = todayIssues.filter(i => isOpenStatus(i.status)).length;
+    const totalResolved = resolved + confirmed + closed;
 
     return {
       date: today,
       total,
       pending,
       inProgress,
-      resolved,
+      resolved: totalResolved,
+      cancelled,
       closed,
       open,
-      resolutionRate: total > 0 ? Math.round(((resolved + closed) / total) * 100) : 0,
+      resolutionRate: total > 0 ? Math.round((totalResolved / total) * 100) : 0,
     };
   }
 
@@ -80,17 +94,16 @@ class StatsService {
       });
 
       const total = branchIssues.length;
-      const resolved = branchIssues.filter(i => i.status === 'resolved').length;
-      const closed = branchIssues.filter(i => i.status === 'closed').length;
-      const open = total - resolved - closed;
+      const resolved = branchIssues.filter(i => isClosedStatus(i.status)).length;
+      const open = branchIssues.filter(i => isOpenStatus(i.status)).length;
 
       if (total > 0) {
         stats.push({
           branch,
           total,
           open,
-          resolved: resolved + closed,
-          resolutionRate: Math.round(((resolved + closed) / total) * 100),
+          resolved: resolved,
+          resolutionRate: Math.round((resolved / total) * 100),
         });
       }
     });
@@ -117,7 +130,7 @@ class StatsService {
 
     urgencyLevels.forEach(level => {
       const issues = todayIssues.filter(i => i.urgency === level);
-      const open = issues.filter(i => i.status !== 'resolved' && i.status !== 'closed').length;
+      const open = issues.filter(i => isOpenStatus(i.status)).length;
       
       stats[level] = {
         total: issues.length,
@@ -135,7 +148,7 @@ class StatsService {
    */
   getOpenIssues() {
     const allIssues = issueManager.getAllIssues({});
-    return allIssues.filter(i => i.status !== 'resolved' && i.status !== 'closed');
+    return allIssues.filter(i => isOpenStatus(i.status));
   }
 
   /**
@@ -189,14 +202,14 @@ class StatsService {
     });
 
     // All time open issues
-    const openIssues = branchIssues.filter(i => i.status !== 'resolved' && i.status !== 'closed');
+    const openIssues = branchIssues.filter(i => isOpenStatus(i.status));
 
     return {
       branch,
       today: {
         total: todayIssues.length,
-        resolved: todayIssues.filter(i => i.status === 'resolved' || i.status === 'closed').length,
-        open: todayIssues.filter(i => i.status !== 'resolved' && i.status !== 'closed').length,
+        resolved: todayIssues.filter(i => isClosedStatus(i.status)).length,
+        open: todayIssues.filter(i => isOpenStatus(i.status)).length,
       },
       allTime: {
         total: branchIssues.length,
@@ -321,7 +334,7 @@ class StatsService {
     message += `OVERALL PERFORMANCE\n`;
     message += `═══════════════════════════════════════\n`;
     message += `Total Issues: ${overall.total}\n`;
-    message += `├─ Resolved/Closed: ${overall.resolved + overall.closed} (${overall.resolutionRate}% resolution rate)\n`;
+    message += `├─ Resolved/Confirmed: ${overall.resolved} (${overall.resolutionRate}% resolution rate)\n`;
     message += `├─ In Progress: ${overall.inProgress}\n`;
     message += `└─ Pending: ${overall.pending}\n\n`;
 

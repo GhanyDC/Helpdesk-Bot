@@ -69,8 +69,7 @@ app.post('/telegram/webhook', async (req, res) => {
     if (update.message) {
       await handleMessage(update.message);
     } else if (update.callback_query) {
-      // Handle callback queries if needed in the future
-      console.log('[Bot] Callback query received');
+      await handleCallbackQuery(update.callback_query);
     }
     
     res.sendStatus(200);
@@ -79,6 +78,41 @@ app.post('/telegram/webhook', async (req, res) => {
     res.sendStatus(500);
   }
 });
+
+// Handle callback queries (inline button presses)
+async function handleCallbackQuery(callbackQuery) {
+  const userId = callbackQuery.from.id.toString();
+  const userName = callbackQuery.from.first_name || 'User';
+  const chatId = callbackQuery.message.chat.id;
+  const messageId = callbackQuery.message.message_id;
+  const data = callbackQuery.data;
+
+  console.log(`[Bot] Callback query from ${userName} (${userId}): ${data}`);
+
+  // Log user interaction for ID discovery
+  userIdLogger.logUser({
+    id: callbackQuery.from.id,
+    username: callbackQuery.from.username,
+    first_name: callbackQuery.from.first_name,
+    last_name: callbackQuery.from.last_name,
+    chat_id: chatId,
+  });
+
+  try {
+    await messageHandler.handleCallbackQuery({
+      callbackQueryId: callbackQuery.id,
+      userId,
+      userName,
+      chatId,
+      messageId,
+      data,
+      message: callbackQuery.message,
+    });
+  } catch (error) {
+    console.error('[Bot] Error handling callback query:', error);
+    await telegramService.answerCallbackQuery(callbackQuery.id, '❌ An error occurred');
+  }
+}
 
 // Handle incoming messages
 async function handleMessage(message) {

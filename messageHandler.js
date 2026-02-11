@@ -15,7 +15,7 @@ const routingService = require('./routingService');     // Branch routing
 const permissionsManager = require('./permissionsManager');
 const statsService = require('./statsService');         // Statistics & metrics
 const userIdLogger = require('./userIdLogger');         // User ID discovery
-const { CONVERSATION_STEPS, SUPPORT_KEYWORDS, ISSUE_STATUS, BRANCHES, DEPARTMENTS } = require('./constants');
+const { CONVERSATION_STEPS, SUPPORT_KEYWORDS, ISSUE_STATUS, STATUS_LABELS, TERMINAL_STATUSES, STATUS_CODES, BRANCHES, DEPARTMENTS } = require('./constants');
 
 class MessageHandler {
   /**
@@ -38,7 +38,7 @@ class MessageHandler {
         await messagingAdapter.sendMessage(chatId, '❌ Status updates can only be done in the support group.\n\nTo create a ticket, just send me a regular message.');
         return;
       }
-      await this.handleSupportCommand(messageText, userId, chatId, userName);
+      await this.handleSupportCommand(messageText, userId, chatId, userName, message);
       return;
     }
 
@@ -245,12 +245,18 @@ To create a new issue, just send any message to the bot.
 
   /**
    * Handle support staff commands (/status)
+   * 
+   * Supports two modes:
+   * 1. REPLY-BASED (new): Reply /status to a ticket message → shows inline buttons
+   * 2. LEGACY: /status ISSUE-ID STATUS (backward compatible)
+   * 
    * @param {string} text - Command text
    * @param {string} userId - User ID
    * @param {string} chatId - Chat ID
    * @param {string} userName - User name
+   * @param {object} message - Original Telegram message object (for reply detection)
    */
-  async handleSupportCommand(text, userId, chatId, userName) {
+  async handleSupportCommand(text, userId, chatId, userName, message) {
     // Check if user is support staff
     const authCheck = permissionsManager.checkAuthorization(userId, 'update');
     if (!authCheck.authorized) {
@@ -258,63 +264,398 @@ To create a new issue, just send any message to the bot.
       return;
     }
 
-    // Parse command: "/status ISSUE-20260105-0001 in-progress"
+    // MODE 1: Reply-based /status (streamlined approach)
+    if (message && message.reply_to_message) {
+      const repliedText = message.reply_to_message.text || '';
+
+      // Extract issue ID from the replied message
+      const issueIdMatch = repliedText.match(/ISSUE-\d{8}-\d{4}/);
+
+      if (!issueIdMatch) {
+        await messagingAdapter.sendMessage(
+          chatId,
+          '❌ Could not find a ticket ID in the message you replied to.\n\nPlease reply /status to a ticket message.'
+        );
+        return;
+      }
+
+      const issueId = issueIdMatch[0];
+      const issue = issueManager.getIssue(issueId);
+
+      if (!issue) {
+        await messagingAdapter.sendMessage(chatId, `❌ Issue not found: ${issueId}`);
+        return;
+      }
+
+      // Check if issue is in terminal state
+      if (TERMINAL_STATUSES.includes(issue.status)) {
+        const label = STATUS_LABELS[issue.status] || issue.status;
+        await messagingAdapter.sendMessage(chatId, `ℹ️ Issue ${issueId} is already ${label}.\nNo further updates allowed.`);
+        return;
+      }
+
+      // Send inline buttons for status update
+      const buttons = this.getStatusButtons(issueId, issue.status);
+      const statusLabel = STATUS_LABELS[issue.status] || issue.status;
+
+      await messagingAdapter.sendInlineKeyboard(
+        chatId,
+        `📋 Update Status for ${issueId}\nCurrent Status: ${statusLabel}\n\nSelect new status:`,
+        buttons
+      );
+      return;
+    }
+
+    // MODE 2: Legacy format /status ISSUE-ID STATUS
     const parts = text.trim().split(/\s+/);
-    
-    if (parts.length < 3) {
+
+    if (parts.length === 1) {
+      // Just "/status" without replying to a message
       await messagingAdapter.sendMessage(
         chatId,
-        '❌ Invalid command format.\n\nUsage:\n/status ISSUE-ID pending\n/status ISSUE-ID in-progress\n/status ISSUE-ID resolved\n/status ISSUE-ID closed'
+        '💡 To update a ticket status:\n\n1️⃣ Reply to the ticket message with /status\n2️⃣ Click the status button you want\n\nOr use the buttons directly on the ticket message.'
       );
+      return;
+    }
+
+    if (parts.length >= 3) {
+      const issueId = parts[1];
+      const statusInput = parts[2].toLowerCase();
+      const validStatuses = Object.values(ISSUE_STATUS);
+
+      if (!validStatuses.includes(statusInput)) {
+        await messagingAdapter.sendMessage(
+          chatId,
+          `❌ Invalid status.\n\nValid statuses: ${validStatuses.join(', ')}`
+        );
+        return;
+      }
+
+      const issue = issueManager.getIssue(issueId);
+      if (!issue) {
+        await messagingAdapter.sendMessage(chatId, `❌ Issue not found: ${issueId}`);
+        return;
+      }
+
+      if (TERMINAL_STATUSES.includes(issue.status)) {
+        const label = STATUS_LABELS[issue.status] || issue.status;
+        await messagingAdapter.sendMessage(chatId, `ℹ️ Issue ${issueId} is already ${label}.\nNo further updates allowed.`);
+        return;
+      }
+
+      const oldStatus = issue.status;
+      const success = issueManager.updateIssueStatus(issueId, statusInput, userId, userName);
+
+      if (success) {
+        const statusLabel = STATUS_LABELS[statusInput] || statusInput;
+        await messagingAdapter.sendMessage(chatId, `✅ Updated ${issueId}\nStatus: ${oldStatus} → ${statusLabel}`);
+        await routingService.notifyStatusUpdate(issue, oldStatus, statusInput, userName);
+
+        if (statusInput === ISSUE_STATUS.RESOLVED || statusInput === ISSUE_STATUS.RESOLVED_WITH_ISSUES) {
+          await this.sendConfirmationRequest(issue, statusInput, userName);
+        }
+
+        console.log(`[MessageHandler] Status updated: ${issueId} ${oldStatus} → ${statusInput} by ${userName}`);
+      } else {
+        await messagingAdapter.sendMessage(chatId, '❌ Failed to update issue status.');
+      }
+    } else {
+      await messagingAdapter.sendMessage(
+        chatId,
+        '❌ Invalid command format.\n\nUsage:\n• Reply /status to a ticket message\n• Or: /status ISSUE-ID in-process'
+      );
+    }
+  }
+
+  /**
+   * Handle Telegram callback queries (inline button presses)
+   * Routes to appropriate handler based on callback data prefix
+   * 
+   * Callback data format:
+   * - st:ISSUE-ID:STATUS_CODE  → Status update by support staff
+   * - cf:ISSUE-ID:yes/no       → Confirmation by employee
+   * - cancel:ISSUE-ID          → Cancel by employee
+   */
+  async handleCallbackQuery(callbackData) {
+    const { callbackQueryId, userId, userName, chatId, messageId, data } = callbackData;
+    console.log(`[MessageHandler] Callback query from ${userName} (${userId}): ${data}`);
+
+    const parts = data.split(':');
+    const action = parts[0];
+
+    switch (action) {
+      case 'st':
+        await this.handleStatusCallback(callbackQueryId, userId, userName, chatId, messageId, parts);
+        break;
+      case 'cf':
+        await this.handleConfirmCallback(callbackQueryId, userId, userName, chatId, messageId, parts);
+        break;
+      case 'cancel':
+        await this.handleCancelCallback(callbackQueryId, userId, userName, chatId, messageId, parts);
+        break;
+      default:
+        await messagingAdapter.answerCallbackQuery(callbackQueryId, '❌ Unknown action');
+    }
+  }
+
+  /**
+   * Handle status update callback from support staff inline button
+   */
+  async handleStatusCallback(callbackQueryId, userId, userName, chatId, messageId, parts) {
+    if (parts.length < 3) {
+      await messagingAdapter.answerCallbackQuery(callbackQueryId, '❌ Invalid callback data');
       return;
     }
 
     const issueId = parts[1];
-    const statusInput = parts[2].toLowerCase();
+    const statusCode = parts[2];
 
-    // Validate status
-    const validStatuses = Object.values(ISSUE_STATUS);
-    if (!validStatuses.includes(statusInput)) {
-      await messagingAdapter.sendMessage(
-        chatId,
-        `❌ Invalid status. Valid statuses: ${validStatuses.join(', ')}`
-      );
+    // Check permissions
+    const authCheck = permissionsManager.checkAuthorization(userId, 'update');
+    if (!authCheck.authorized) {
+      await messagingAdapter.answerCallbackQuery(callbackQueryId, '❌ Only support staff can update status', true);
       return;
     }
 
-    const newStatus = statusInput;
+    // Map short status code to full status value
+    const newStatus = STATUS_CODES[statusCode];
+    if (!newStatus) {
+      await messagingAdapter.answerCallbackQuery(callbackQueryId, '❌ Invalid status');
+      return;
+    }
 
-    // Get issue to verify it exists
     const issue = issueManager.getIssue(issueId);
-    
     if (!issue) {
-      await messagingAdapter.sendMessage(chatId, `❌ Issue not found: ${issueId}`);
+      await messagingAdapter.answerCallbackQuery(callbackQueryId, '❌ Issue not found');
       return;
     }
+
+    // Check if issue is in terminal state
+    if (TERMINAL_STATUSES.includes(issue.status)) {
+      await messagingAdapter.answerCallbackQuery(callbackQueryId, '❌ Ticket already closed/confirmed', true);
+      return;
+    }
+
+    const oldStatus = issue.status;
 
     // Update issue status
     const success = issueManager.updateIssueStatus(issueId, newStatus, userId, userName);
+    if (!success) {
+      await messagingAdapter.answerCallbackQuery(callbackQueryId, '❌ Failed to update status');
+      return;
+    }
+
+    // Answer callback query with confirmation toast
+    await messagingAdapter.answerCallbackQuery(callbackQueryId, `✅ Updated to ${STATUS_LABELS[newStatus]}`);
+
+    // Edit the ticket message to reflect new status + show appropriate buttons
+    const updatedText = this.formatUpdatedTicketMessage(issue, newStatus, userName);
+    const newButtons = this.getStatusButtons(issueId, newStatus);
+    await messagingAdapter.editMessageText(
+      chatId, messageId, updatedText,
+      newButtons.length > 0 ? newButtons : null
+    );
+
+    // Notify employee and central monitoring
+    await routingService.notifyStatusUpdate(issue, oldStatus, newStatus, userName);
+
+    // If resolved/resolved-with-issues, send confirmation request to employee
+    if (newStatus === ISSUE_STATUS.RESOLVED || newStatus === ISSUE_STATUS.RESOLVED_WITH_ISSUES) {
+      await this.sendConfirmationRequest(issue, newStatus, userName);
+    }
+
+    console.log(`[MessageHandler] Status updated via button: ${issueId} ${oldStatus} → ${newStatus} by ${userName}`);
+  }
+
+  /**
+   * Handle employee confirmation callback (confirm resolved / not resolved)
+   */
+  async handleConfirmCallback(callbackQueryId, userId, userName, chatId, messageId, parts) {
+    if (parts.length < 3) {
+      await messagingAdapter.answerCallbackQuery(callbackQueryId, '❌ Invalid callback data');
+      return;
+    }
+
+    const issueId = parts[1];
+    const action = parts[2]; // 'yes' or 'no'
+
+    const issue = issueManager.getIssue(issueId);
+    if (!issue) {
+      await messagingAdapter.answerCallbackQuery(callbackQueryId, '❌ Issue not found');
+      return;
+    }
+
+    // Verify this is the ticket creator
+    if (issue.employee_id !== userId) {
+      await messagingAdapter.answerCallbackQuery(callbackQueryId, '❌ Only the ticket creator can confirm', true);
+      return;
+    }
+
+    if (TERMINAL_STATUSES.includes(issue.status)) {
+      await messagingAdapter.answerCallbackQuery(callbackQueryId, 'ℹ️ This ticket is already closed');
+      return;
+    }
+
+    if (action === 'yes') {
+      // Employee confirms resolution
+      const oldStatus = issue.status;
+      const success = issueManager.updateIssueStatus(issueId, ISSUE_STATUS.CONFIRMED, userId, userName);
+      if (success) {
+        await messagingAdapter.answerCallbackQuery(callbackQueryId, '✅ Confirmed!');
+
+        const updatedText = `✅ TICKET CONFIRMED\n\n📋 Issue ${issueId} has been confirmed as resolved.\nThank you for your feedback!\n\nIf you have other issues, send any message to create a new ticket.`;
+        await messagingAdapter.editMessageText(chatId, messageId, updatedText);
+
+        // Notify support group
+        await routingService.notifyStatusUpdate(issue, oldStatus, ISSUE_STATUS.CONFIRMED, userName + ' (Employee)');
+      }
+    } else if (action === 'no') {
+      // Employee says NOT resolved → reopen ticket
+      const oldStatus = issue.status;
+      const success = issueManager.updateIssueStatus(issueId, ISSUE_STATUS.IN_PROCESS, userId, userName);
+      if (success) {
+        await messagingAdapter.answerCallbackQuery(callbackQueryId, '📋 Ticket reopened');
+
+        const updatedText = `📋 TICKET REOPENED\n\n📋 Issue ${issueId} has been reopened.\nOur support team has been notified and will follow up.\n\nThank you for your feedback!`;
+        await messagingAdapter.editMessageText(chatId, messageId, updatedText);
+
+        // Notify support group that employee says not resolved
+        await routingService.notifyReopened(issue, userName);
+      }
+    }
+  }
+
+  /**
+   * Handle employee cancel ticket callback
+   */
+  async handleCancelCallback(callbackQueryId, userId, userName, chatId, messageId, parts) {
+    if (parts.length < 2) {
+      await messagingAdapter.answerCallbackQuery(callbackQueryId, '❌ Invalid callback data');
+      return;
+    }
+
+    const issueId = parts[1];
+    const issue = issueManager.getIssue(issueId);
+
+    if (!issue) {
+      await messagingAdapter.answerCallbackQuery(callbackQueryId, '❌ Issue not found');
+      return;
+    }
+
+    // Verify this is the ticket creator
+    if (issue.employee_id !== userId) {
+      await messagingAdapter.answerCallbackQuery(callbackQueryId, '❌ Only the ticket creator can cancel', true);
+      return;
+    }
+
+    if (TERMINAL_STATUSES.includes(issue.status)) {
+      await messagingAdapter.answerCallbackQuery(callbackQueryId, 'ℹ️ This ticket is already closed');
+      return;
+    }
+
+    const oldStatus = issue.status;
+    const success = issueManager.updateIssueStatus(issueId, ISSUE_STATUS.CANCELLED_USER, userId, userName);
 
     if (success) {
-      // Confirm to support staff
-      await messagingAdapter.sendMessage(
-        chatId,
-        `✅ Updated ${issueId}\nStatus: ${issue.status} → ${newStatus}`
-      );
+      await messagingAdapter.answerCallbackQuery(callbackQueryId, '✅ Ticket cancelled');
 
-      // Notify all stakeholders (employee + central monitoring)
-      // Using routingService to handle multi-destination notifications
-      await routingService.notifyStatusUpdate(
-        issue,
-        issue.status,
-        newStatus,
-        userName
-      );
+      const updatedText = `❌ TICKET CANCELLED\n\n📋 Issue ${issueId} has been cancelled by you.\n\nIf you need help, send any message to create a new ticket.`;
+      await messagingAdapter.editMessageText(chatId, messageId, updatedText);
 
-      console.log(`[MessageHandler] Status updated: ${issueId} → ${newStatus} by ${userName}`);
-    } else {
-      await messagingAdapter.sendMessage(chatId, '❌ Failed to update issue status.');
+      // Notify support group
+      await routingService.notifyStatusUpdate(issue, oldStatus, ISSUE_STATUS.CANCELLED_USER, userName + ' (Employee)');
     }
+  }
+
+  /**
+   * Send confirmation request to the employee who created the ticket
+   * Called when support marks a ticket as resolved/resolved-with-issues
+   */
+  async sendConfirmationRequest(issue, newStatus, updatedBy) {
+    const statusLabel = STATUS_LABELS[newStatus] || newStatus;
+
+    const text = [
+      '📋 ISSUE STATUS UPDATE',
+      '',
+      `📋 Issue ID: ${issue.issue_id}`,
+      `📊 Status: ${statusLabel}`,
+      `👤 Updated by: ${updatedBy}`,
+      '',
+      newStatus === 'resolved'
+        ? 'Your issue has been marked as resolved.'
+        : 'Your issue has been resolved with some remaining issues noted.',
+      '',
+      'Please confirm if the issue has been resolved to your satisfaction.',
+      '',
+      '⚠️ If you don\'t respond within 7 days, the ticket will be automatically confirmed.',
+    ].join('\n');
+
+    const buttons = [
+      [
+        { text: '✅ Confirm Resolved', callback_data: `cf:${issue.issue_id}:yes` },
+        { text: '❌ Not Resolved', callback_data: `cf:${issue.issue_id}:no` }
+      ]
+    ];
+
+    await messagingAdapter.sendInlineKeyboard(issue.employee_id, text, buttons);
+  }
+
+  /**
+   * Format updated ticket message for the group chat (after status change)
+   */
+  formatUpdatedTicketMessage(issue, newStatus, updatedBy) {
+    const statusLabel = STATUS_LABELS[newStatus] || newStatus;
+
+    return [
+      '📋 HELPDESK ISSUE',
+      '',
+      `📋 Issue ID: ${issue.issue_id}`,
+      `🏢 Branch: ${issue.branch}`,
+      `📂 Department: ${issue.department}`,
+      `👤 Employee: ${issue.employee_name}`,
+      `🔧 Category: ${issue.category}`,
+      `⚠️ Urgency: ${issue.urgency}`,
+      `📞 Contact: ${issue.contact_person}`,
+      '',
+      '📝 Description:',
+      issue.description,
+      '',
+      `📊 Status: ${statusLabel}`,
+      `🔄 Last Updated by: ${updatedBy}`,
+      `📅 Created: ${new Date(issue.created_at).toLocaleString()}`,
+    ].join('\n');
+  }
+
+  /**
+   * Get inline status buttons based on current ticket status
+   * Shows only valid status transitions
+   */
+  getStatusButtons(issueId, currentStatus) {
+    const buttons = [];
+
+    switch (currentStatus) {
+      case 'pending':
+        buttons.push([
+          { text: '🔧 In Process', callback_data: `st:${issueId}:ip` },
+          { text: '❌ Cancel (Staff)', callback_data: `st:${issueId}:cs` }
+        ]);
+        break;
+      case 'in-process':
+        buttons.push([
+          { text: '✅ Resolved', callback_data: `st:${issueId}:rv` },
+          { text: '⚠️ Resolved w/ Issues', callback_data: `st:${issueId}:rwi` }
+        ]);
+        buttons.push([
+          { text: '❌ Cancel (Staff)', callback_data: `st:${issueId}:cs` }
+        ]);
+        break;
+      // resolved/resolved-with-issues: waiting for user confirmation
+      // confirmed/cancelled: terminal states — no buttons
+      default:
+        break;
+    }
+
+    return buttons;
   }
 
   /**
@@ -621,10 +962,15 @@ Is this correct?
     // End conversation
     conversationManager.endConversation(userId);
 
-    // Confirm to employee
-    await messagingAdapter.sendMessage(
+    // Confirm to employee with cancel button
+    const cancelButton = [
+      [{ text: '❌ Cancel This Ticket', callback_data: `cancel:${issue.issueId}` }]
+    ];
+
+    await messagingAdapter.sendInlineKeyboard(
       chatId,
-      `✅ Issue created successfully!\n\n📋 Issue ID: ${issue.issueId}\n\nOur support team has been notified and will respond soon.\n\nYou will receive status updates automatically.`
+      `✅ Issue created successfully!\n\n📋 Issue ID: ${issue.issueId}\n📊 Status: ⏳ Pending\n\nOur support team has been notified and will respond soon.\nYou will receive status updates automatically.`,
+      cancelButton
     );
 
     // ROUTE TO APPROPRIATE GROUPS

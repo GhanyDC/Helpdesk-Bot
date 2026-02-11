@@ -197,7 +197,7 @@ class IssueManager {
         UPDATE issues 
         SET status = ?, 
             updated_at = CURRENT_TIMESTAMP,
-            resolved_at = CASE WHEN ? = 'RESOLVED' THEN CURRENT_TIMESTAMP ELSE resolved_at END
+            resolved_at = CASE WHEN ? IN ('resolved', 'resolved-with-issues') THEN CURRENT_TIMESTAMP ELSE resolved_at END
         WHERE issue_id = ?
       `);
 
@@ -279,6 +279,33 @@ class IssueManager {
     `);
     
     return stmt.all(issueId);
+  }
+
+  /**
+   * Get resolved/resolved-with-issues tickets that haven't been confirmed
+   * and were last updated more than `daysOld` days ago.
+   * Used by the auto-close scheduler.
+   * 
+   * @param {number} daysOld - Number of days since last status update
+   * @returns {array} - Array of issues eligible for auto-confirmation
+   */
+  getUnconfirmedResolvedIssues(daysOld) {
+    try {
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - daysOld);
+      const cutoffStr = cutoffDate.toISOString().replace('T', ' ').slice(0, 19);
+
+      const stmt = this.db.prepare(`
+        SELECT * FROM issues 
+        WHERE status IN ('resolved', 'resolved-with-issues')
+        AND updated_at <= ?
+      `);
+
+      return stmt.all(cutoffStr);
+    } catch (error) {
+      console.error('[IssueManager] Error getting unconfirmed resolved issues:', error);
+      return [];
+    }
   }
 
   /**

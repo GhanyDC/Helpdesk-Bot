@@ -66,25 +66,58 @@ const URGENCY_LEVELS = {
 // Issue Status Values
 const ISSUE_STATUS = {
   PENDING: 'pending',
-  IN_PROGRESS: 'in-progress',
+  IN_PROCESS: 'in-process',
   RESOLVED: 'resolved',
-  CLOSED: 'closed',
+  RESOLVED_WITH_ISSUES: 'resolved-with-issues',
+  CONFIRMED: 'confirmed',
+  CANCELLED_STAFF: 'cancelled-staff',
+  CANCELLED_USER: 'cancelled-user',
 };
 
-// Support Staff Keywords
+// Display labels for each status (with emoji)
+const STATUS_LABELS = {
+  'pending': '⏳ Pending',
+  'in-process': '🔧 In Process',
+  'resolved': '✅ Resolved',
+  'resolved-with-issues': '⚠️ Resolved with Issues',
+  'confirmed': '✅ Confirmed',
+  'closed': '✅ Closed',           // Legacy compatibility
+  'cancelled-staff': '❌ Cancelled (Staff)',
+  'cancelled-user': '❌ Cancelled (User)',
+};
+
+// Terminal statuses — no further updates allowed
+const TERMINAL_STATUSES = ['confirmed', 'closed', 'cancelled-staff', 'cancelled-user'];
+
+// Short codes for callback data (inline button callback_data has 64-byte limit)
+const STATUS_CODES = {
+  'ip': 'in-process',
+  'rv': 'resolved',
+  'rwi': 'resolved-with-issues',
+  'cs': 'cancelled-staff',
+  'cu': 'cancelled-user',
+};
+
+// Support Staff Keywords (legacy compatibility)
 const SUPPORT_KEYWORDS = {
   PENDING: 'pending',
-  IN_PROGRESS: 'in-progress',
+  IN_PROCESS: 'in-process',
   RESOLVED: 'resolved',
-  CLOSED: 'closed',
+  RESOLVED_WITH_ISSUES: 'resolved-with-issues',
+  CONFIRMED: 'confirmed',
+  CANCELLED_STAFF: 'cancelled-staff',
+  CANCELLED_USER: 'cancelled-user',
 };
 
 module.exports = {
   CONVERSATION_STEPS,
-  BRANCHES,        // NEW: Branch constants
+  BRANCHES,
   DEPARTMENTS,
   CATEGORIES,
   URGENCY_LEVELS,
   ISSUE_STATUS,
+  STATUS_LABELS,
+  TERMINAL_STATUSES,
+  STATUS_CODES,
   SUPPORT_KEYWORDS,
 };

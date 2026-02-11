@@ -134,6 +134,38 @@ class MessagingAdapter {
   formatIssueMessage(issue) {
     return this.platformService.formatIssueMessage(issue);
   }
+
+  /**
+   * Send a message with inline keyboard buttons (callback buttons)
+   * @param {string} chatId - Chat/user ID
+   * @param {string} text - Message text
+   * @param {array} inlineKeyboard - Array of rows of inline buttons
+   * @returns {object} - Sent message object
+   */
+  async sendInlineKeyboard(chatId, text, inlineKeyboard) {
+    return await this.platformService.sendInlineKeyboard(chatId, text, inlineKeyboard);
+  }
+
+  /**
+   * Answer a callback query (inline button press acknowledgment)
+   * @param {string} callbackQueryId - Callback query ID
+   * @param {string} text - Toast/alert text
+   * @param {boolean} showAlert - Show modal alert vs toast
+   */
+  async answerCallbackQuery(callbackQueryId, text, showAlert = false) {
+    return await this.platformService.answerCallbackQuery(callbackQueryId, text, showAlert);
+  }
+
+  /**
+   * Edit an existing message's text and/or inline keyboard
+   * @param {string} chatId - Chat ID
+   * @param {number} messageId - Message ID to edit
+   * @param {string} text - New message text
+   * @param {array|null} inlineKeyboard - New inline keyboard or null to remove
+   */
+  async editMessageText(chatId, messageId, text, inlineKeyboard = null) {
+    return await this.platformService.editMessageText(chatId, messageId, text, inlineKeyboard);
+  }
 }
 
 // Export singleton instance

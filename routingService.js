@@ -93,11 +93,12 @@ class RoutingService {
       return;
     }
 
-    // Format and send action message
+    // Format action message and send with inline status buttons
     const message = this.formatActionMessage(issue);
-    await messagingAdapter.sendGroupMessage(targetGroup, message);
+    const buttons = this.getInitialStatusButtons(issue.issueId);
+    await messagingAdapter.sendInlineKeyboard(targetGroup, message, buttons);
 
-    console.log(`[RoutingService] Sent action message to ${branch} branch group ${targetGroup}`);
+    console.log(`[RoutingService] Sent action message with buttons to ${branch} branch group ${targetGroup}`);
   }
 
   /**
@@ -149,16 +150,27 @@ class RoutingService {
 📝 Description:
 ${issue.description}
 
-Status: ${issue.status}
-Created: ${new Date(issue.createdAt).toLocaleString()}
+📊 Status: ⏳ Pending
+📅 Created: ${new Date(issue.createdAt).toLocaleString()}
 
 ━━━━━━━━━━━━━━━━━━━
-To update status, reply:
-/status ${issue.issueId} pending
-/status ${issue.issueId} in-progress
-/status ${issue.issueId} resolved
-/status ${issue.issueId} closed
+Use the buttons below to update status
+Or reply /status to this message
     `.trim();
+  }
+
+  /**
+   * Get initial inline status buttons for a new ticket
+   * @param {string} issueId - Issue ID
+   * @returns {array} - Inline keyboard layout
+   */
+  getInitialStatusButtons(issueId) {
+    return [
+      [
+        { text: '🔧 In Process', callback_data: `st:${issueId}:ip` },
+        { text: '❌ Cancel (Staff)', callback_data: `st:${issueId}:cs` }
+      ]
+    ];
   }
 
   /**
@@ -223,8 +235,12 @@ Created: ${new Date(issue.createdAt).toLocaleString()}
 
       // Calculate stats
       const total = todayIssues.length;
-      const resolved = todayIssues.filter(i => i.status === 'RESOLVED').length;
-      const open = todayIssues.filter(i => i.status !== 'RESOLVED').length;
+      const resolved = todayIssues.filter(i => 
+        ['resolved', 'resolved-with-issues', 'confirmed', 'closed'].includes(i.status)
+      ).length;
+      const open = todayIssues.filter(i => 
+        !['resolved', 'resolved-with-issues', 'confirmed', 'closed', 'cancelled-staff', 'cancelled-user'].includes(i.status)
+      ).length;
 
       return { total, open, resolved };
     } catch (error) {
@@ -243,13 +259,16 @@ Created: ${new Date(issue.createdAt).toLocaleString()}
    */
   async notifyStatusUpdate(issue, oldStatus, newStatus, updatedBy) {
     // Notify the employee who created the issue
-    await messagingAdapter.notifyStatusUpdate(
-      issue.employee_id,
-      issue.issue_id,
-      oldStatus,
-      newStatus,
-      updatedBy
-    );
+    // Skip for resolved/resolved-with-issues (confirmation request sent separately with buttons)
+    if (newStatus !== 'resolved' && newStatus !== 'resolved-with-issues') {
+      await messagingAdapter.notifyStatusUpdate(
+        issue.employee_id,
+        issue.issue_id,
+        oldStatus,
+        newStatus,
+        updatedBy
+      );
+    }
 
     // Notify central monitoring (if enabled)
     if (this.enableCentralMonitoring && this.centralMonitoringGroup) {
@@ -298,6 +317,66 @@ Created: ${new Date(issue.createdAt).toLocaleString()}
       }
 
       await messagingAdapter.sendGroupMessage(this.centralMonitoringGroup, updateMessage);
+    }
+  }
+
+  /**
+   * Notify support group when employee reports issue NOT resolved
+   * Sends a reopened notice with inline buttons to the branch support group
+   * 
+   * @param {object} issue - Issue object
+   * @param {string} employeeName - Employee who reported not resolved
+   */
+  async notifyReopened(issue, employeeName) {
+    const branch = issue.branch;
+    let targetGroup = this.branchGroups[branch] || this.fallbackGroupId;
+
+    if (targetGroup) {
+      const buttons = [
+        [
+          { text: '✅ Resolved', callback_data: `st:${issue.issue_id}:rv` },
+          { text: '⚠️ Resolved w/ Issues', callback_data: `st:${issue.issue_id}:rwi` }
+        ],
+        [
+          { text: '❌ Cancel (Staff)', callback_data: `st:${issue.issue_id}:cs` }
+        ]
+      ];
+
+      const message = `
+🔄 TICKET REOPENED
+
+📋 Issue ID: ${issue.issue_id}
+🏢 Branch: ${issue.branch}
+📂 Department: ${issue.department}
+👤 Employee: ${issue.employee_name}
+🔧 Category: ${issue.category}
+⚠️ Urgency: ${issue.urgency}
+
+❌ Employee reported the issue is NOT resolved.
+The ticket has been set back to IN PROCESS.
+
+Please follow up with the employee.
+      `.trim();
+
+      await messagingAdapter.sendInlineKeyboard(targetGroup, message, buttons);
+    }
+
+    // Notify central monitoring
+    if (this.enableCentralMonitoring && this.centralMonitoringGroup) {
+      const monitorMsg = `
+[📊 CENTRAL MONITORING - Read Only]
+
+🔄 TICKET REOPENED
+
+📋 Issue: ${issue.issue_id}
+🏢 Branch: ${issue.branch}
+📂 Department: ${issue.department}
+❌ Employee reported issue NOT resolved
+📊 Status: resolved → in-process
+⏰ ${new Date().toLocaleString()}
+      `.trim();
+
+      await messagingAdapter.sendGroupMessage(this.centralMonitoringGroup, monitorMsg);
     }
   }
 

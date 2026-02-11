@@ -25,17 +25,24 @@
 const config = require('./config');
 const statsService = require('./statsService');
 const messagingAdapter = require('./messagingAdapter');
+const issueManager = require('./issueManager');
+const routingService = require('./routingService');
 
 class SchedulerService {
   constructor() {
     this.reportSent = false;
     this.checkInterval = null;
+    this.autoCloseInterval = null;
     
     // Default report time: 18:00 (6:00 PM)
     this.reportHour = parseInt(process.env.DAILY_REPORT_HOUR || '18', 10);
     this.reportMinute = parseInt(process.env.DAILY_REPORT_MINUTE || '0', 10);
     
+    // Auto-close resolved tickets after 7 days without employee response
+    this.autoCloseDays = parseInt(process.env.AUTO_CLOSE_DAYS || '7', 10);
+    
     console.log(`[SchedulerService] Daily report scheduled for ${this.reportHour}:${String(this.reportMinute).padStart(2, '0')}`);
+    console.log(`[SchedulerService] Auto-close after ${this.autoCloseDays} days`);
   }
 
   /**
@@ -43,10 +50,20 @@ class SchedulerService {
    * Checks every minute if it's time to send the daily report
    */
   start() {
-    // Check every minute
+    // Check every minute for daily report
     this.checkInterval = setInterval(() => {
       this.checkDailyReport();
     }, 60 * 1000); // 60 seconds
+
+    // Check every hour for auto-close eligible tickets
+    this.autoCloseInterval = setInterval(() => {
+      this.checkAutoClose();
+    }, 60 * 60 * 1000); // 1 hour
+
+    // Run auto-close check on startup (after 30 seconds to let everything initialize)
+    setTimeout(() => {
+      this.checkAutoClose();
+    }, 30 * 1000);
 
     console.log('[SchedulerService] Started');
   }
@@ -57,8 +74,11 @@ class SchedulerService {
   stop() {
     if (this.checkInterval) {
       clearInterval(this.checkInterval);
-      console.log('[SchedulerService] Stopped');
     }
+    if (this.autoCloseInterval) {
+      clearInterval(this.autoCloseInterval);
+    }
+    console.log('[SchedulerService] Stopped');
   }
 
   /**
@@ -116,6 +136,53 @@ class SchedulerService {
   async sendReportNow() {
     console.log('[SchedulerService] Sending report immediately (manual trigger)');
     await this.sendDailyReport();
+  }
+
+  /**
+   * Check for resolved tickets that need auto-confirmation
+   * Tickets in 'resolved' or 'resolved-with-issues' status for more than
+   * autoCloseDays (default 7) are automatically confirmed.
+   */
+  async checkAutoClose() {
+    try {
+      const issues = issueManager.getUnconfirmedResolvedIssues(this.autoCloseDays);
+
+      if (issues.length === 0) {
+        return;
+      }
+
+      console.log(`[SchedulerService] Found ${issues.length} ticket(s) eligible for auto-confirmation`);
+
+      for (const issue of issues) {
+        const oldStatus = issue.status;
+        const success = issueManager.updateIssueStatus(
+          issue.issue_id,
+          'confirmed',
+          'SYSTEM',
+          'Auto-Confirmed (7 days)'
+        );
+
+        if (success) {
+          // Notify the employee
+          await messagingAdapter.sendMessage(
+            issue.employee_id,
+            `✅ AUTO-CONFIRMED\n\n📋 Issue ${issue.issue_id} has been automatically confirmed after ${this.autoCloseDays} days with no response.\n\nIf you still have issues, please create a new ticket.`
+          );
+
+          // Notify support group via routing service
+          await routingService.notifyStatusUpdate(
+            issue,
+            oldStatus,
+            'confirmed',
+            'System (Auto-Confirm)'
+          );
+
+          console.log(`[SchedulerService] Auto-confirmed: ${issue.issue_id}`);
+        }
+      }
+    } catch (error) {
+      console.error('[SchedulerService] Error during auto-close check:', error);
+    }
   }
 }
 
