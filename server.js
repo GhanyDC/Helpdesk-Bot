@@ -26,6 +26,7 @@ const messageHandler = require('./messageHandler');
 const conversationManager = require('./conversationManager');
 const issueManager = require('./issueManager');
 const schedulerService = require('./schedulerService');
+const userIdLogger = require('./userIdLogger');
 
 // Validate configuration
 if (!config.telegram.authToken) {
@@ -86,6 +87,16 @@ async function handleMessage(message) {
   const userName = message.from.first_name || 'User';
   const chatType = message.chat.type; // 'private', 'group', 'supergroup', or 'channel'
   const isGroupChat = chatType === 'group' || chatType === 'supergroup';
+  
+  // Log user interaction for ID discovery
+  // This helps admins get user IDs for SUPPORT_STAFF_IDS configuration
+  userIdLogger.logUser({
+    id: message.from.id,
+    username: message.from.username,
+    first_name: message.from.first_name,
+    last_name: message.from.last_name,
+    chat_id: chatId,
+  });
   
   // Handle different message types
   if (message.text) {
@@ -153,8 +164,9 @@ process.on('SIGINT', () => {
   // Stop scheduler
   schedulerService.stop();
   
-  // Close database connection
+  // Close database connections
   issueManager.close();
+  userIdLogger.close();
   
   console.log('[Server] Cleanup completed. Goodbye!');
   process.exit(0);
@@ -164,6 +176,7 @@ process.on('SIGTERM', () => {
   console.log('\n[Server] Received SIGTERM, shutting down...');
   schedulerService.stop();
   issueManager.close();
+  userIdLogger.close();
   process.exit(0);
 });
 

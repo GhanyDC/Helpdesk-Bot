@@ -14,6 +14,7 @@ const messagingAdapter = require('./messagingAdapter'); // Platform abstraction
 const routingService = require('./routingService');     // Branch routing
 const permissionsManager = require('./permissionsManager');
 const statsService = require('./statsService');         // Statistics & metrics
+const userIdLogger = require('./userIdLogger');         // User ID discovery
 const { CONVERSATION_STEPS, SUPPORT_KEYWORDS, ISSUE_STATUS, BRANCHES, DEPARTMENTS } = require('./constants');
 
 class MessageHandler {
@@ -113,6 +114,14 @@ class MessageHandler {
         await this.handleOpenIssuesCommand(chatId);
         break;
 
+      case '/whoami':
+        await this.handleWhoAmICommand(userId, chatId);
+        break;
+
+      case '/list_users':
+        await this.handleListUsersCommand(userId, chatId);
+        break;
+
       case '/help':
         await this.handleHelpCommand(chatId);
         break;
@@ -182,6 +191,10 @@ class MessageHandler {
 📋 OPERATIONS:
 /open_issues - View all open issues by department
 
+� USER MANAGEMENT:
+/whoami - Get your user ID and role
+/list_users - List all registered users (Support Staff only)
+
 🔧 SUPPORT STAFF ONLY:
 /status <issue-id> pending - Mark as pending
 /status <issue-id> in-progress - Mark as in progress
@@ -197,6 +210,37 @@ To create a new issue, just send any message to the bot.
     `.trim();
 
     await messagingAdapter.sendMessage(chatId, helpMessage);
+  }
+
+  /**
+   * Handle /whoami command
+   * Shows user their own ID and permissions
+   * @param {string} userId - User ID
+   * @param {string} chatId - Chat ID
+   */
+  async handleWhoAmICommand(userId, chatId) {
+    const message = userIdLogger.formatUserInfo(userId);
+    await messagingAdapter.sendMessage(chatId, message);
+  }
+
+  /**
+   * Handle /list_users command
+   * Shows all registered users (Support Staff only)
+   * @param {string} userId - User ID
+   * @param {string} chatId - Chat ID
+   */
+  async handleListUsersCommand(userId, chatId) {
+    // Check if user is support staff
+    if (!permissionsManager.isSupportStaff(userId)) {
+      await messagingAdapter.sendMessage(
+        chatId,
+        '❌ This command is only available to support staff.\n\nUse /whoami to see your own information.'
+      );
+      return;
+    }
+
+    const message = userIdLogger.formatUserList();
+    await messagingAdapter.sendMessage(chatId, message);
   }
 
   /**
@@ -354,6 +398,16 @@ To create a new issue, just send any message to the bot.
    * This determines which support group will receive the issue
    */
   async handleBranchStep(userId, chatId, branch) {
+    // Validate branch input
+    const validBranches = Object.values(BRANCHES);
+    if (!validBranches.includes(branch)) {
+      await messagingAdapter.sendMessage(
+        chatId,
+        `❌ Invalid branch: "${branch}"\n\nPlease select from the keyboard buttons:\n${validBranches.join(', ')}`
+      );
+      return;
+    }
+
     conversationManager.updateConversation(
       userId,
       'branch',
@@ -373,6 +427,16 @@ To create a new issue, just send any message to the bot.
    * This is NOT used for routing - only stored as metadata
    */
   async handleDepartmentStep(userId, chatId, department) {
+    // Validate department input
+    const validDepartments = Object.values(DEPARTMENTS);
+    if (!validDepartments.includes(department)) {
+      await messagingAdapter.sendMessage(
+        chatId,
+        `❌ Invalid department: "${department}"\n\nPlease select from the keyboard buttons:\n${validDepartments.join(', ')}`
+      );
+      return;
+    }
+
     conversationManager.updateConversation(
       userId,
       'department',
@@ -391,6 +455,16 @@ To create a new issue, just send any message to the bot.
    * Handle category selection
    */
   async handleCategoryStep(userId, chatId, category) {
+    // Validate category input
+    const validCategories = Object.values(require('./constants').CATEGORIES);
+    if (!validCategories.includes(category)) {
+      await messagingAdapter.sendMessage(
+        chatId,
+        `❌ Invalid category: "${category}"\n\nPlease select from the keyboard buttons.`
+      );
+      return;
+    }
+
     conversationManager.updateConversation(
       userId,
       'category',
@@ -409,6 +483,16 @@ To create a new issue, just send any message to the bot.
    * Handle urgency selection
    */
   async handleUrgencyStep(userId, chatId, urgency) {
+    // Validate urgency input
+    const validUrgencies = Object.values(require('./constants').URGENCY_LEVELS);
+    if (!validUrgencies.includes(urgency)) {
+      await messagingAdapter.sendMessage(
+        chatId,
+        `❌ Invalid urgency: "${urgency}"\n\nPlease select from the keyboard buttons.`
+      );
+      return;
+    }
+
     conversationManager.updateConversation(
       userId,
       'urgency',

@@ -368,12 +368,12 @@ Created: ${new Date(issue.createdAt).toLocaleString()}
       let count = 0;
 
       todayIssues.forEach(issue => {
-        const history = issueManager.getIssueHistory(issue.issue_id);
+        const history = issueManager.getStatusHistory(issue.issue_id);
         if (history && history.length > 0) {
           // First status change
           const firstChange = history[0];
           const created = new Date(issue.created_at);
-          const responded = new Date(firstChange.changed_at);
+          const responded = new Date(firstChange.updated_at);
           const diffMs = responded - created;
           const diffMins = Math.floor(diffMs / 60000);
           
