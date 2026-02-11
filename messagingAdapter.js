@@ -166,6 +166,24 @@ class MessagingAdapter {
   async editMessageText(chatId, messageId, text, inlineKeyboard = null) {
     return await this.platformService.editMessageText(chatId, messageId, text, inlineKeyboard);
   }
+
+  /**
+   * Delete a message from a chat
+   * @param {string} chatId - Chat ID
+   * @param {number} messageId - Message ID to delete
+   */
+  async deleteMessage(chatId, messageId) {
+    return await this.platformService.deleteMessage(chatId, messageId);
+  }
+
+  /**
+   * Set chat permissions for a group
+   * @param {string} chatId - Group chat ID
+   * @param {object} permissions - Chat permissions object
+   */
+  async setChatPermissions(chatId, permissions) {
+    return await this.platformService.setChatPermissions(chatId, permissions);
+  }
 }
 
 // Export singleton instance

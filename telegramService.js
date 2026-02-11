@@ -320,6 +320,35 @@ ${this.getStatusMessage(newStatus)}
       console.error('[TelegramService] Error editing message:', error);
     }
   }
+
+  /**
+   * Delete a message from a chat
+   * @param {string} chatId - Chat ID
+   * @param {number} messageId - Message ID to delete
+   */
+  async deleteMessage(chatId, messageId) {
+    try {
+      await this.bot.deleteMessage(chatId, messageId);
+      console.log(`[TelegramService] Deleted message ${messageId} in ${chatId}`);
+    } catch (error) {
+      console.error('[TelegramService] Error deleting message:', error);
+    }
+  }
+
+  /**
+   * Set chat permissions for a group (restrict members from sending messages)
+   * Used to lock down central monitoring group so only bot can post
+   * @param {string} chatId - Group chat ID
+   * @param {object} permissions - Chat permissions object
+   */
+  async setChatPermissions(chatId, permissions) {
+    try {
+      await this.bot.setChatPermissions(chatId, permissions);
+      console.log(`[TelegramService] Set chat permissions for ${chatId}`);
+    } catch (error) {
+      console.error('[TelegramService] Error setting chat permissions:', error);
+    }
+  }
 }
 
 // Export singleton instance

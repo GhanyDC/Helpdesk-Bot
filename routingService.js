@@ -141,21 +141,20 @@ class RoutingService {
 
 📋 Issue ID: ${issue.issueId}
 🏢 Branch: ${issue.branch}
-📂 Department: ${issue.department}
-👤 Employee: ${issue.employeeName}
-🔧 Category: ${issue.category}
+Department: ${issue.department}
+Employee: ${issue.employeeName}
+Category: ${issue.category}
 ⚠️ Urgency: ${issue.urgency}
-📞 Contact: ${issue.contactPerson}
+Contact: ${issue.contactPerson}
 
 📝 Description:
 ${issue.description}
 
 📊 Status: ⏳ Pending
-📅 Created: ${new Date(issue.createdAt).toLocaleString()}
+Created: ${new Date(issue.createdAt).toLocaleString()}
 
 ━━━━━━━━━━━━━━━━━━━
 Use the buttons below to update status
-Or reply /status to this message
     `.trim();
   }
 
@@ -188,15 +187,15 @@ Or reply /status to this message
     const todayStats = this.getBranchStatsToday(issue.branch);
 
     return `
-[📊 MONITORING COPY - Read Only]
+[📊 MONITORING - Read Only]
 
 🆕 NEW ISSUE - ${issue.branch} Branch
 
 📋 Issue ID: ${issue.issueId}
-📂 Department: ${issue.department}
+Department: ${issue.department}
 ⚠️ Urgency: ${issue.urgency}
-🔧 Category: ${issue.category}
-👤 Employee: ${issue.employeeName}
+Category: ${issue.category}
+Employee: ${issue.employeeName}
 
 📝 Description:
 ${issue.description.substring(0, 200)}${issue.description.length > 200 ? '...' : ''}
@@ -257,7 +256,7 @@ Created: ${new Date(issue.createdAt).toLocaleString()}
    * @param {string} newStatus - New status
    * @param {string} updatedBy - Name of person who updated
    */
-  async notifyStatusUpdate(issue, oldStatus, newStatus, updatedBy) {
+  async notifyStatusUpdate(issue, oldStatus, newStatus, updatedBy, remarks = '') {
     // Notify the employee who created the issue
     // Skip for resolved/resolved-with-issues (confirmation request sent separately with buttons)
     if (newStatus !== 'resolved' && newStatus !== 'resolved-with-issues') {
@@ -275,45 +274,40 @@ Created: ${new Date(issue.createdAt).toLocaleString()}
       let updateMessage = '';
       
       // For resolved/closed status, send detailed branch metrics
-      if (newStatus === 'resolved' || newStatus === 'closed') {
+      if (newStatus === 'resolved' || newStatus === 'resolved-with-issues' || newStatus === 'closed') {
         const branchStats = this.getBranchStatsToday(issue.branch);
         const yesterdayStats = this.getBranchStatsYesterday(issue.branch);
         const avgResponseTime = this.getAverageResponseTime(issue.branch);
         
-        updateMessage = `
-[📊 CENTRAL MONITORING - Read Only]
+        let resolvedMsg = `[📊 MONITORING - Read Only]
 
 ✅ ISSUE RESOLVED
 
 📋 Issue: ${issue.issue_id}
 🏢 Branch: ${issue.branch}
-📂 Department: ${issue.department}
+Department: ${issue.department}
 ⚠️ Urgency: ${issue.urgency}
-👤 Resolved by: ${updatedBy}
-⏰ ${new Date().toLocaleString()}
+Resolved by: ${updatedBy}`;
 
-━━━━━━━━━━━━━━━━━━━
-📊 ${issue.branch} BRANCH METRICS TODAY:
-├─ Total Issues: ${branchStats.total} (${this.getChangeIndicator(branchStats.total, yesterdayStats.total)} from yesterday: ${yesterdayStats.total})
-├─ Open Issues: ${branchStats.open}
-├─ Resolved Today: ${branchStats.resolved}
-└─ Avg Response Time: ${avgResponseTime}
-        `.trim();
+        if (remarks) {
+          resolvedMsg += `\n\n📝 Remarks:\n${remarks}`;
+        }
+
+        resolvedMsg += `\n\n━━━━━━━━━━━━━━━━━━━\n📊 ${issue.branch} BRANCH METRICS TODAY:\n├─ Total Issues: ${branchStats.total} (${this.getChangeIndicator(branchStats.total, yesterdayStats.total)} from yesterday: ${yesterdayStats.total})\n├─ Open Issues: ${branchStats.open}\n├─ Resolved Today: ${branchStats.resolved}\n└─ Avg Response Time: ${avgResponseTime}`;
+
+        updateMessage = resolvedMsg;
       } else {
         // For other status updates, send simple notification
-        updateMessage = `
-[📊 CENTRAL MONITORING - Read Only]
+        updateMessage = `[📊 MONITORING - Read Only]
 
 📊 STATUS UPDATE
 
 📋 Issue: ${issue.issue_id}
 🏢 Branch: ${issue.branch}
-📂 Department: ${issue.department}
+Department: ${issue.department}
 ⚠️ Urgency: ${issue.urgency}
 📊 Status: ${oldStatus} → ${newStatus}
-👤 Updated by: ${updatedBy}
-⏰ ${new Date().toLocaleString()}
-        `.trim();
+Updated by: ${updatedBy}\n⏰ ${new Date().toLocaleString()}`;
       }
 
       await messagingAdapter.sendGroupMessage(this.centralMonitoringGroup, updateMessage);
@@ -347,9 +341,9 @@ Created: ${new Date(issue.createdAt).toLocaleString()}
 
 📋 Issue ID: ${issue.issue_id}
 🏢 Branch: ${issue.branch}
-📂 Department: ${issue.department}
-👤 Employee: ${issue.employee_name}
-🔧 Category: ${issue.category}
+Department: ${issue.department}
+Employee: ${issue.employee_name}
+Category: ${issue.category}
 ⚠️ Urgency: ${issue.urgency}
 
 ❌ Employee reported the issue is NOT resolved.
@@ -364,13 +358,13 @@ Please follow up with the employee.
     // Notify central monitoring
     if (this.enableCentralMonitoring && this.centralMonitoringGroup) {
       const monitorMsg = `
-[📊 CENTRAL MONITORING - Read Only]
+[📊 MONITORING - Read Only]
 
 🔄 TICKET REOPENED
 
 📋 Issue: ${issue.issue_id}
 🏢 Branch: ${issue.branch}
-📂 Department: ${issue.department}
+Department: ${issue.department}
 ❌ Employee reported issue NOT resolved
 📊 Status: resolved → in-process
 ⏰ ${new Date().toLocaleString()}

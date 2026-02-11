@@ -230,7 +230,7 @@ class StatsService {
     let message = `📊 HELPDESK STATISTICS - Today (${this.getFormattedDate()})\n\n`;
     
     // Overall stats
-    message += `📈 OVERALL:\n`;
+    message += `OVERALL:\n`;
     message += `├─ Total Issues: ${overall.total}\n`;
     message += `├─ Open: ${overall.open}\n`;
     message += `├─ Resolved: ${overall.resolved}\n`;
@@ -268,8 +268,7 @@ class StatsService {
     const openByBranch = this.getOpenIssuesByBranch();  // CORRECTED: By branch
     const totalOpen = openByBranch.reduce((sum, branch) => sum + branch.total, 0);
 
-    let message = `📋 OPEN ISSUES - ${this.getFormattedDate()}\n\n`;
-    message += `Total Open: ${totalOpen}\n\n`;
+    let message = `📋 OPEN ISSUES - ${this.getFormattedDate()}\n\nTotal Open: ${totalOpen}\n\n`;
 
     if (openByBranch.length > 0) {
       message += `🏢 BY BRANCH:\n`;
@@ -277,7 +276,6 @@ class StatsService {
         const prefix = index === openByBranch.length - 1 ? '└─' : '├─';
         message += `${prefix} ${branch.branch}: ${branch.total}\n`;
         
-        // Show urgency breakdown
         const urgencyParts = [];
         if (branch.critical > 0) urgencyParts.push(`🔴 ${branch.critical} Critical`);
         if (branch.high > 0) urgencyParts.push(`🟠 ${branch.high} High`);
@@ -306,12 +304,12 @@ class StatsService {
     
     let message = `📊 ${branch} BRANCH STATISTICS\n\n`;
     
-    message += `📅 TODAY (${this.getFormattedDate()}):\n`;
+    message += `TODAY (${this.getFormattedDate()}):\n`;
     message += `├─ Total Issues: ${stats.today.total}\n`;
     message += `├─ Open: ${stats.today.open}\n`;
     message += `└─ Resolved: ${stats.today.resolved}\n\n`;
     
-    message += `📈 ALL TIME:\n`;
+    message += `ALL TIME:\n`;
     message += `├─ Total Issues: ${stats.allTime.total}\n`;
     message += `└─ Currently Open: ${stats.allTime.open}`;
 
@@ -330,41 +328,32 @@ class StatsService {
     const openByBranch = this.getOpenIssuesByBranch();  // CORRECTED: By branch
 
     let message = `📊 DAILY HELPDESK REPORT - ${this.getFormattedDate()}\n\n`;
-    message += `═══════════════════════════════════════\n`;
     message += `OVERALL PERFORMANCE\n`;
-    message += `═══════════════════════════════════════\n`;
-    message += `Total Issues: ${overall.total}\n`;
+    message += `├─ Total Issues: ${overall.total}\n`;
     message += `├─ Resolved/Confirmed: ${overall.resolved} (${overall.resolutionRate}% resolution rate)\n`;
     message += `├─ In Progress: ${overall.inProgress}\n`;
     message += `└─ Pending: ${overall.pending}\n\n`;
 
     if (branchStats.length > 0) {
-      message += `═══════════════════════════════════════\n`;
-      message += `BRANCH BREAKDOWN\n`;
-      message += `═══════════════════════════════════════\n`;
-      
+      message += `🏢 BRANCH BREAKDOWN\n`;
       branchStats.forEach(branch => {
-        message += `🏢 ${branch.branch}: ${branch.total} issues\n`;
-        message += `   ├─ Resolution Rate: ${branch.resolutionRate}%\n`;
-        message += `   └─ Currently Open: ${branch.open}\n\n`;
+        message += `${branch.branch}: ${branch.total} issues\n`;
+        message += `   Resolution: ${branch.resolutionRate}%  |  Open: ${branch.open}\n`;
       });
+      message += `\n`;
     }
 
     // Critical alerts
     const criticalOpen = urgencyStats.Critical?.open || 0;
     if (criticalOpen > 0) {
-      message += `═══════════════════════════════════════\n`;
       message += `⚠️ ALERTS\n`;
-      message += `═══════════════════════════════════════\n`;
       message += `🔴 ${criticalOpen} CRITICAL issue${criticalOpen > 1 ? 's' : ''} still open\n\n`;
     }
 
     // Open issues summary
     const totalOpen = openByBranch.reduce((sum, branch) => sum + branch.total, 0);
     if (totalOpen > 0) {
-      message += `═══════════════════════════════════════\n`;
       message += `OPEN ISSUES (Carried Over)\n`;
-      message += `═══════════════════════════════════════\n`;
       openByBranch.forEach(branch => {
         message += `${branch.branch}: ${branch.total} open\n`;
       });

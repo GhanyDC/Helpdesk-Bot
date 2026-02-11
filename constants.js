@@ -15,7 +15,7 @@
 // Conversation Steps - tracks where user is in the flow
 const CONVERSATION_STEPS = {
   START: 'START',
-  BRANCH: 'BRANCH',           // NEW: Ask for branch FIRST (routing key)
+  BRANCH: 'BRANCH',           // Ask for branch FIRST (routing key)
   DEPARTMENT: 'DEPARTMENT',   // Ask for department SECOND (context only)
   CATEGORY: 'CATEGORY',
   URGENCY: 'URGENCY',
@@ -23,6 +23,7 @@ const CONVERSATION_STEPS = {
   CONTACT: 'CONTACT',
   CONFIRMATION: 'CONFIRMATION',
   COMPLETED: 'COMPLETED',
+  AWAITING_REMARKS: 'AWAITING_REMARKS', // Support staff must provide remarks on resolve
 };
 
 // Branch/Company Options (ROUTING KEY)

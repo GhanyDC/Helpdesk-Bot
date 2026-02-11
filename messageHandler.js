@@ -18,6 +18,15 @@ const userIdLogger = require('./userIdLogger');         // User ID discovery
 const { CONVERSATION_STEPS, SUPPORT_KEYWORDS, ISSUE_STATUS, STATUS_LABELS, TERMINAL_STATUSES, STATUS_CODES, BRANCHES, DEPARTMENTS } = require('./constants');
 
 class MessageHandler {
+  constructor() {
+    // Tracks pending remarks from support staff
+    // Key: `${chatId}_${userId}`, Value: { issueId, statusCode, messageId, timestamp }
+    this.pendingRemarks = new Map();
+
+    // Cleanup stale pending remarks every 10 minutes
+    setInterval(() => this.cleanupPendingRemarks(), 10 * 60 * 1000);
+  }
+
   /**
    * Handle incoming text message
    * @param {object} message - Telegram message object
@@ -31,6 +40,35 @@ class MessageHandler {
     const isGroupChat = userProfile.isGroup || false;
 
     console.log(`[MessageHandler] Received message from ${userName} (${userId}) in ${isGroupChat ? 'GROUP' : 'PRIVATE'}: ${messageText}`);
+
+    // ── CENTRAL MONITORING: Delete non-bot messages ──
+    const config = require('./config');
+    if (isGroupChat && config.support.centralMonitoringGroup &&
+        chatId.toString() === config.support.centralMonitoringGroup.toString()) {
+      try {
+        await messagingAdapter.deleteMessage(chatId, message.message_id);
+      } catch (e) { /* bot may not have delete perms yet */ }
+      return;
+    }
+
+    // ── SUPPORT GROUP: Check for pending remarks ──
+    if (isGroupChat && !messageText.startsWith('/')) {
+      const remarksKey = `${chatId}_${userId}`;
+      if (this.pendingRemarks.has(remarksKey)) {
+        await this.processRemarks(remarksKey, messageText, userId, chatId, userName);
+        return;
+      }
+    }
+
+    // Handle /cancel_remarks command in groups
+    if (isGroupChat && messageText.toLowerCase() === '/cancel_remarks') {
+      const remarksKey = `${chatId}_${userId}`;
+      if (this.pendingRemarks.has(remarksKey)) {
+        this.pendingRemarks.delete(remarksKey);
+        await messagingAdapter.sendMessage(chatId, '❌ Remarks cancelled. Status was not updated.');
+      }
+      return;
+    }
 
     // Check if this is a support command (/status) - MUST CHECK BEFORE OTHER COMMANDS
     if (this.isSupportCommand(messageText)) {
@@ -50,15 +88,15 @@ class MessageHandler {
 
     // Ticket creation only allowed in PRIVATE CHATS
     if (isGroupChat) {
-      // Ignore regular messages in groups (only respond to commands)
-      console.log(`[MessageHandler] Ignoring non-command message in group chat`);
+      // Notify user that tickets can't be created in groups
+      await messagingAdapter.sendMessage(chatId, '⛔ Ticket creation is not available in groups.\n\nPlease message the bot directly to submit a new helpdesk ticket.');
       return;
     }
 
     // Check if user can create issues
     const authCheck = permissionsManager.checkAuthorization(userId, 'create');
     if (!authCheck.authorized) {
-      await messagingAdapter.sendMessage(chatId, authCheck.message);
+      await messagingAdapter.sendMessage(chatId, `⛔ ACCESS DENIED\n\n${authCheck.message}`);
       return;
     }
 
@@ -180,34 +218,24 @@ class MessageHandler {
    * @param {string} chatId - Chat ID
    */
   async handleHelpCommand(chatId) {
-    const helpMessage = `
-🤖 HELPDESK BOT COMMANDS
+    const helpMessage = `📋 HELPDESK COMMAND GUIDE
 
-📊 STATISTICS:
-/stats - Today's overall statistics
-/stats <department> - Department-specific stats
-  Example: /stats Sales
+📊 Reports & Statistics
+/stats — Today's overall statistics
+/stats Sales — Department-specific stats
+/open_issues — All open issues by branch
 
-📋 OPERATIONS:
-/open_issues - View all open issues by department
+👤 Account
+/whoami — View your user ID & role
+/list_users — All registered users (Staff)
 
-� USER MANAGEMENT:
-/whoami - Get your user ID and role
-/list_users - List all registered users (Support Staff only)
+🔧 Support Staff — Status Updates
+• Click inline buttons on ticket messages
+• Or reply /status to any ticket message
+• Remarks are required when resolving
 
-🔧 SUPPORT STAFF ONLY:
-/status <issue-id> pending - Mark as pending
-/status <issue-id> in-progress - Mark as in progress
-/status <issue-id> resolved - Mark as resolved
-/status <issue-id> closed - Mark as closed
-  Example: /status ISSUE-20260107-0023 in-progress
-
-❓ HELP:
-/help - Show this message
-
-━━━━━━━━━━━━━━━━━━━
-To create a new issue, just send any message to the bot.
-    `.trim();
+📝 Create a Ticket
+Send any message directly to this bot in a private chat to start a new ticket.`;
 
     await messagingAdapter.sendMessage(chatId, helpMessage);
   }
@@ -300,7 +328,12 @@ To create a new issue, just send any message to the bot.
 
       await messagingAdapter.sendInlineKeyboard(
         chatId,
-        `📋 Update Status for ${issueId}\nCurrent Status: ${statusLabel}\n\nSelect new status:`,
+        `📋 UPDATE STATUS
+
+📋 Issue: ${issueId}
+📊 Current Status: ${statusLabel}
+
+Select new status below:`,
         buttons
       );
       return;
@@ -313,7 +346,7 @@ To create a new issue, just send any message to the bot.
       // Just "/status" without replying to a message
       await messagingAdapter.sendMessage(
         chatId,
-        '💡 To update a ticket status:\n\n1️⃣ Reply to the ticket message with /status\n2️⃣ Click the status button you want\n\nOr use the buttons directly on the ticket message.'
+        '💡 HOW TO UPDATE STATUS\n\n1️⃣ Reply to any ticket message with /status\n2️⃣ Click the desired status button\n3️⃣ Type your remarks when prompted\n\nOr use the inline buttons directly on the ticket message.'
       );
       return;
     }
@@ -344,16 +377,34 @@ To create a new issue, just send any message to the bot.
       }
 
       const oldStatus = issue.status;
+
+      // For resolve statuses, require remarks as additional text
+      if (statusInput === ISSUE_STATUS.RESOLVED || statusInput === ISSUE_STATUS.RESOLVED_WITH_ISSUES) {
+        const remarksText = parts.slice(3).join(' ').trim();
+        if (!remarksText) {
+          await messagingAdapter.sendMessage(chatId, `📝 Remarks required when resolving a ticket.\n\nUsage:\n/status ${issueId} ${statusInput} <your remarks>\n\nOr use the inline buttons on the ticket message for a guided flow.`);
+          return;
+        }
+
+        const success = issueManager.resolveWithRemarks(issueId, statusInput, remarksText, userId, userName);
+        if (success) {
+          const statusLabel = STATUS_LABELS[statusInput] || statusInput;
+          await messagingAdapter.sendMessage(chatId, `✅ Updated ${issueId}\nStatus: ${oldStatus} → ${statusLabel}\n\n📝 Remarks:\n${remarksText}`);
+          await routingService.notifyStatusUpdate(issue, oldStatus, statusInput, userName, remarksText);
+          await this.sendConfirmationRequest(issue, statusInput, userName, remarksText);
+          console.log(`[MessageHandler] Status updated: ${issueId} ${oldStatus} → ${statusInput} by ${userName}`);
+        } else {
+          await messagingAdapter.sendMessage(chatId, '❌ Failed to update issue status.');
+        }
+        return;
+      }
+
       const success = issueManager.updateIssueStatus(issueId, statusInput, userId, userName);
 
       if (success) {
         const statusLabel = STATUS_LABELS[statusInput] || statusInput;
         await messagingAdapter.sendMessage(chatId, `✅ Updated ${issueId}\nStatus: ${oldStatus} → ${statusLabel}`);
         await routingService.notifyStatusUpdate(issue, oldStatus, statusInput, userName);
-
-        if (statusInput === ISSUE_STATUS.RESOLVED || statusInput === ISSUE_STATUS.RESOLVED_WITH_ISSUES) {
-          await this.sendConfirmationRequest(issue, statusInput, userName);
-        }
 
         console.log(`[MessageHandler] Status updated: ${issueId} ${oldStatus} → ${statusInput} by ${userName}`);
       } else {
@@ -362,7 +413,7 @@ To create a new issue, just send any message to the bot.
     } else {
       await messagingAdapter.sendMessage(
         chatId,
-        '❌ Invalid command format.\n\nUsage:\n• Reply /status to a ticket message\n• Or: /status ISSUE-ID in-process'
+        '❌ Invalid command format.\n\nUsage:\n• Reply /status to a ticket message\n• /status ISSUE-ID STATUS\n\nTip: Use the inline buttons on ticket messages for the easiest experience.'
       );
     }
   }
@@ -400,6 +451,8 @@ To create a new issue, just send any message to the bot.
 
   /**
    * Handle status update callback from support staff inline button
+   * For resolve/resolve-with-issues: stores pending state and asks for remarks
+   * For other statuses: updates immediately
    */
   async handleStatusCallback(callbackQueryId, userId, userName, chatId, messageId, parts) {
     if (parts.length < 3) {
@@ -436,16 +489,42 @@ To create a new issue, just send any message to the bot.
       return;
     }
 
-    const oldStatus = issue.status;
+    // ── RESOLVE requires remarks ──
+    if (newStatus === ISSUE_STATUS.RESOLVED || newStatus === ISSUE_STATUS.RESOLVED_WITH_ISSUES) {
+      // Store pending state — next message from this user in this group = remarks
+      const remarksKey = `${chatId}_${userId}`;
+      this.pendingRemarks.set(remarksKey, {
+        issueId,
+        statusCode,
+        newStatus,
+        messageId,
+        oldStatus: issue.status,
+        timestamp: Date.now(),
+      });
 
-    // Update issue status
+      await messagingAdapter.answerCallbackQuery(callbackQueryId, '📝 Please type your remarks now');
+
+      await messagingAdapter.sendMessage(chatId, `📝 REMARKS REQUIRED
+
+📋 Issue: ${issueId}
+
+@${userName}, please type your remarks describing what was done to resolve this issue.
+
+Your next message will be saved as the resolution remarks.
+
+💡 Type /cancel_remarks to abort`);
+
+      return;
+    }
+
+    // ── Non-resolve statuses: update immediately ──
+    const oldStatus = issue.status;
     const success = issueManager.updateIssueStatus(issueId, newStatus, userId, userName);
     if (!success) {
       await messagingAdapter.answerCallbackQuery(callbackQueryId, '❌ Failed to update status');
       return;
     }
 
-    // Answer callback query with confirmation toast
     await messagingAdapter.answerCallbackQuery(callbackQueryId, `✅ Updated to ${STATUS_LABELS[newStatus]}`);
 
     // Edit the ticket message to reflect new status + show appropriate buttons
@@ -459,12 +538,71 @@ To create a new issue, just send any message to the bot.
     // Notify employee and central monitoring
     await routingService.notifyStatusUpdate(issue, oldStatus, newStatus, userName);
 
-    // If resolved/resolved-with-issues, send confirmation request to employee
-    if (newStatus === ISSUE_STATUS.RESOLVED || newStatus === ISSUE_STATUS.RESOLVED_WITH_ISSUES) {
-      await this.sendConfirmationRequest(issue, newStatus, userName);
+    console.log(`[MessageHandler] Status updated via button: ${issueId} ${oldStatus} → ${newStatus} by ${userName}`);
+  }
+
+  /**
+   * Process remarks typed by support staff after clicking resolve
+   */
+  async processRemarks(remarksKey, remarks, userId, chatId, userName) {
+    const pending = this.pendingRemarks.get(remarksKey);
+    this.pendingRemarks.delete(remarksKey);
+
+    if (!pending) return;
+
+    // Handle cancel
+    if (remarks.toLowerCase() === '/cancel_remarks') {
+      await messagingAdapter.sendMessage(chatId, '❌ Remarks cancelled. Status was not updated.');
+      return;
     }
 
-    console.log(`[MessageHandler] Status updated via button: ${issueId} ${oldStatus} → ${newStatus} by ${userName}`);
+    const { issueId, newStatus, messageId, oldStatus } = pending;
+
+    // Update with remarks
+    const success = issueManager.resolveWithRemarks(issueId, newStatus, remarks, userId, userName);
+    if (!success) {
+      await messagingAdapter.sendMessage(chatId, '❌ Failed to update issue status.');
+      return;
+    }
+
+    const issue = issueManager.getIssue(issueId);
+    const statusLabel = STATUS_LABELS[newStatus] || newStatus;
+
+    // Confirm in group
+    await messagingAdapter.sendMessage(chatId, `✅ STATUS UPDATED
+
+📋 Issue: ${issueId}
+📊 Status: ${STATUS_LABELS[oldStatus] || oldStatus} → ${statusLabel}
+👤 Updated by: ${userName}
+
+📝 Remarks:
+${remarks}`);
+
+    // Edit the original ticket message
+    const updatedText = this.formatUpdatedTicketMessage(issue, newStatus, userName, remarks);
+    await messagingAdapter.editMessageText(chatId, messageId, updatedText, null);
+
+    // Notify employee and central monitoring
+    await routingService.notifyStatusUpdate(issue, oldStatus, newStatus, userName, remarks);
+
+    // Send confirmation request to employee with remarks
+    await this.sendConfirmationRequest(issue, newStatus, userName, remarks);
+
+    console.log(`[MessageHandler] Resolved ${issueId} with remarks by ${userName}`);
+  }
+
+  /**
+   * Cleanup stale pending remarks (older than 15 minutes)
+   */
+  cleanupPendingRemarks() {
+    const now = Date.now();
+    const maxAge = 15 * 60 * 1000; // 15 minutes
+    for (const [key, value] of this.pendingRemarks.entries()) {
+      if (now - value.timestamp > maxAge) {
+        this.pendingRemarks.delete(key);
+        console.log(`[MessageHandler] Cleaned up stale pending remarks for ${key}`);
+      }
+    }
   }
 
   /**
@@ -516,7 +654,7 @@ To create a new issue, just send any message to the bot.
       if (success) {
         await messagingAdapter.answerCallbackQuery(callbackQueryId, '📋 Ticket reopened');
 
-        const updatedText = `📋 TICKET REOPENED\n\n📋 Issue ${issueId} has been reopened.\nOur support team has been notified and will follow up.\n\nThank you for your feedback!`;
+        const updatedText = `🔄 TICKET REOPENED\n\n📋 Issue ${issueId} has been reopened.\nOur support team has been notified and will follow up.\n\nThank you for your feedback!`;
         await messagingAdapter.editMessageText(chatId, messageId, updatedText);
 
         // Notify support group that employee says not resolved
@@ -571,24 +709,23 @@ To create a new issue, just send any message to the bot.
    * Send confirmation request to the employee who created the ticket
    * Called when support marks a ticket as resolved/resolved-with-issues
    */
-  async sendConfirmationRequest(issue, newStatus, updatedBy) {
+  async sendConfirmationRequest(issue, newStatus, updatedBy, remarks = '') {
     const statusLabel = STATUS_LABELS[newStatus] || newStatus;
 
-    const text = [
-      '📋 ISSUE STATUS UPDATE',
-      '',
-      `📋 Issue ID: ${issue.issue_id}`,
-      `📊 Status: ${statusLabel}`,
-      `👤 Updated by: ${updatedBy}`,
-      '',
-      newStatus === 'resolved'
-        ? 'Your issue has been marked as resolved.'
-        : 'Your issue has been resolved with some remaining issues noted.',
-      '',
-      'Please confirm if the issue has been resolved to your satisfaction.',
-      '',
-      '⚠️ If you don\'t respond within 7 days, the ticket will be automatically confirmed.',
-    ].join('\n');
+    let text = `📋 ISSUE STATUS UPDATE
+
+📋 Issue ID: ${issue.issue_id}
+📊 Status: ${statusLabel}
+👤 Updated by: ${updatedBy}`;
+
+    if (remarks) {
+      text += `\n\n📝 Remarks:\n${remarks}`;
+    }
+
+    text += `\n\n${newStatus === 'resolved'
+      ? 'Your issue has been marked as resolved.'
+      : 'Your issue has been resolved with some remaining issues noted.'
+    }\n\nPlease confirm if the issue has been resolved to your satisfaction.\n\n⚠️ If you don't respond within 7 days, the ticket will be automatically confirmed.`;
 
     const buttons = [
       [
@@ -603,27 +740,32 @@ To create a new issue, just send any message to the bot.
   /**
    * Format updated ticket message for the group chat (after status change)
    */
-  formatUpdatedTicketMessage(issue, newStatus, updatedBy) {
+  formatUpdatedTicketMessage(issue, newStatus, updatedBy, remarks = '') {
     const statusLabel = STATUS_LABELS[newStatus] || newStatus;
 
-    return [
-      '📋 HELPDESK ISSUE',
-      '',
-      `📋 Issue ID: ${issue.issue_id}`,
-      `🏢 Branch: ${issue.branch}`,
-      `📂 Department: ${issue.department}`,
-      `👤 Employee: ${issue.employee_name}`,
-      `🔧 Category: ${issue.category}`,
-      `⚠️ Urgency: ${issue.urgency}`,
-      `📞 Contact: ${issue.contact_person}`,
-      '',
-      '📝 Description:',
-      issue.description,
-      '',
-      `📊 Status: ${statusLabel}`,
-      `🔄 Last Updated by: ${updatedBy}`,
-      `📅 Created: ${new Date(issue.created_at).toLocaleString()}`,
-    ].join('\n');
+    let text = `📋 HELPDESK ISSUE
+
+📋 Issue ID: ${issue.issue_id}
+🏢 Branch: ${issue.branch}
+Department: ${issue.department}
+Employee: ${issue.employee_name}
+Category: ${issue.category}
+⚠️ Urgency: ${issue.urgency}
+Contact: ${issue.contact_person}
+
+📝 Description:
+${issue.description}
+
+📊 Status: ${statusLabel}
+🔄 Updated by: ${updatedBy}`;
+
+    if (remarks) {
+      text += `\n\n📝 Remarks:\n${remarks}`;
+    }
+
+    text += `\n\nCreated: ${new Date(issue.created_at).toLocaleString()}`;
+
+    return text;
   }
 
   /**
@@ -744,7 +886,7 @@ To create a new issue, just send any message to the bot.
     if (!validBranches.includes(branch)) {
       await messagingAdapter.sendMessage(
         chatId,
-        `❌ Invalid branch: "${branch}"\n\nPlease select from the keyboard buttons:\n${validBranches.join(', ')}`
+        `❌ Invalid selection: "${branch}"\n\nPlease use the keyboard buttons to select your branch.`
       );
       return;
     }
@@ -758,7 +900,7 @@ To create a new issue, just send any message to the bot.
 
     await messagingAdapter.sendKeyboard(
       chatId,
-      '📂 Please select your department:\n\n(This is for context only)',
+      '📂 Please select your department:',
       messagingAdapter.getDepartmentKeyboard()
     );
   }
@@ -773,7 +915,7 @@ To create a new issue, just send any message to the bot.
     if (!validDepartments.includes(department)) {
       await messagingAdapter.sendMessage(
         chatId,
-        `❌ Invalid department: "${department}"\n\nPlease select from the keyboard buttons:\n${validDepartments.join(', ')}`
+        `❌ Invalid selection: "${department}"\n\nPlease use the keyboard buttons to select your department.`
       );
       return;
     }
@@ -801,7 +943,7 @@ To create a new issue, just send any message to the bot.
     if (!validCategories.includes(category)) {
       await messagingAdapter.sendMessage(
         chatId,
-        `❌ Invalid category: "${category}"\n\nPlease select from the keyboard buttons.`
+        `❌ Invalid selection: "${category}"\n\nPlease use the keyboard buttons to select a category.`
       );
       return;
     }
@@ -829,7 +971,7 @@ To create a new issue, just send any message to the bot.
     if (!validUrgencies.includes(urgency)) {
       await messagingAdapter.sendMessage(
         chatId,
-        `❌ Invalid urgency: "${urgency}"\n\nPlease select from the keyboard buttons.`
+        `❌ Invalid selection: "${urgency}"\n\nPlease use the keyboard buttons to select urgency.`
       );
       return;
     }
@@ -880,20 +1022,18 @@ To create a new issue, just send any message to the bot.
     // Show summary for confirmation
     const data = conversationManager.getConversationData(userId);
     
-    const summary = `
-📋 ISSUE SUMMARY
+    const summary = `📋 ISSUE SUMMARY
 
 🏢 Branch: ${data.branch}
-📂 Department: ${data.department}
-🔧 Category: ${data.category}
+Department: ${data.department}
+Category: ${data.category}
 ⚠️ Urgency: ${data.urgency}
-📞 Contact: ${data.contactPerson}
+Contact: ${data.contactPerson}
 
 📝 Description:
 ${data.description}
 
-Is this correct?
-    `.trim();
+Is this correct?`;
 
     await messagingAdapter.sendKeyboard(
       chatId,

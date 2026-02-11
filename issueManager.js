@@ -54,9 +54,18 @@ class IssueManager {
         this.db.exec(`ALTER TABLE issues ADD COLUMN branch TEXT`);
         console.log('[IssueManager] Added branch column to existing database');
       } catch (error) {
-        // Column already exists or other error - safe to ignore
         if (!error.message.includes('duplicate column name')) {
           console.warn('[IssueManager] Branch column migration note:', error.message);
+        }
+      }
+
+      // Migration: Add remarks column
+      try {
+        this.db.exec(`ALTER TABLE issues ADD COLUMN remarks TEXT`);
+        console.log('[IssueManager] Added remarks column to existing database');
+      } catch (error) {
+        if (!error.message.includes('duplicate column name')) {
+          console.warn('[IssueManager] Remarks column migration note:', error.message);
         }
       }
 
@@ -69,10 +78,21 @@ class IssueManager {
           new_status TEXT NOT NULL,
           updated_by TEXT NOT NULL,
           updated_by_name TEXT,
+          remarks TEXT,
           updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (issue_id) REFERENCES issues(issue_id)
         )
       `);
+
+      // Migration: Add remarks column to status_history if missing (for existing databases)
+      try {
+        this.db.exec(`ALTER TABLE status_history ADD COLUMN remarks TEXT`);
+        console.log('[IssueManager] Added remarks column to status_history table');
+      } catch (error) {
+        if (!error.message.includes('duplicate column name')) {
+          console.warn('[IssueManager] status_history remarks migration note:', error.message);
+        }
+      }
 
       console.log('[IssueManager] Database initialized successfully');
     } catch (error) {
@@ -221,14 +241,49 @@ class IssueManager {
    * @param {string} newStatus - New status
    * @param {string} updatedBy - User ID
    * @param {string} updatedByName - User name
+   * @param {string} remarks - Optional remarks from support staff
    */
-  logStatusChange(issueId, oldStatus, newStatus, updatedBy, updatedByName) {
+  logStatusChange(issueId, oldStatus, newStatus, updatedBy, updatedByName, remarks = null) {
     const stmt = this.db.prepare(`
-      INSERT INTO status_history (issue_id, old_status, new_status, updated_by, updated_by_name)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO status_history (issue_id, old_status, new_status, updated_by, updated_by_name, remarks)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
 
-    stmt.run(issueId, oldStatus, newStatus, updatedBy, updatedByName);
+    stmt.run(issueId, oldStatus, newStatus, updatedBy, updatedByName, remarks);
+  }
+
+  /**
+   * Add remarks to an issue and update status atomically
+   * Used when support resolves an issue with mandatory remarks
+   * @param {string} issueId - Issue ID
+   * @param {string} newStatus - New status value
+   * @param {string} remarks - Support staff remarks
+   * @param {string} updatedBy - User ID
+   * @param {string} updatedByName - User name
+   * @returns {boolean}
+   */
+  resolveWithRemarks(issueId, newStatus, remarks, updatedBy, updatedByName) {
+    const issue = this.getIssue(issueId);
+    if (!issue) return false;
+
+    const oldStatus = issue.status;
+
+    try {
+      const updateStmt = this.db.prepare(`
+        UPDATE issues 
+        SET status = ?, remarks = ?, updated_at = CURRENT_TIMESTAMP,
+            resolved_at = CURRENT_TIMESTAMP
+        WHERE issue_id = ?
+      `);
+      updateStmt.run(newStatus, remarks, issueId);
+
+      this.logStatusChange(issueId, oldStatus, newStatus, updatedBy, updatedByName, remarks);
+      console.log(`[IssueManager] Resolved ${issueId} with remarks: ${remarks.substring(0, 50)}...`);
+      return true;
+    } catch (error) {
+      console.error('[IssueManager] Error resolving with remarks:', error);
+      return false;
+    }
   }
 
   /**

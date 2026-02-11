@@ -140,7 +140,7 @@ async function handleMessage(message) {
       if (!isGroupChat) {
         await telegramService.sendMessage(
           chatId,
-          `👋 Hello ${userName}!\n\nWelcome to the ${config.telegram.botName}.\n\nI'm here to help you submit and track helpdesk issues.\n\n📋 To create an issue: Send any message\n📊 For statistics: Send /stats\n❓ For help: Send /help`
+          `👋 Hello ${userName}!\n\nWelcome to the ${config.telegram.botName}.\n\nI'm here to help you submit and track helpdesk issues.\n\n📝 To create an issue: Send any message\n📊 For statistics: Send /stats\n❓ For help: Send /help`
         );
       }
       return;
@@ -165,10 +165,12 @@ async function handleMessage(message) {
     }
   } else {
     // Handle non-text messages (images, stickers, etc.)
-    await telegramService.sendMessage(
-      chatId,
-      'ℹ️ Please send text messages only. Images and other media are not supported at this time.'
-    );
+    if (!isGroupChat) {
+      await telegramService.sendMessage(
+        chatId,
+        'ℹ️ Please send text messages only.\nImages and other media are not supported.'
+      );
+    }
   }
 }
 
@@ -182,6 +184,24 @@ bot.setWebHook(webhookUrl)
   .catch(error => {
     console.error('❌ Error setting webhook:', error);
   });
+
+// Lock down central monitoring group (only bot can send)
+if (config.support.enableCentralMonitoring && config.support.centralMonitoringGroup) {
+  telegramService.setChatPermissions(config.support.centralMonitoringGroup, {
+    can_send_messages: false,
+    can_send_media_messages: false,
+    can_send_polls: false,
+    can_send_other_messages: false,
+    can_add_web_page_previews: false,
+    can_change_info: false,
+    can_invite_users: false,
+    can_pin_messages: false,
+  }).then(() => {
+    console.log('🔒 Central monitoring group locked (bot-only posting)');
+  }).catch(err => {
+    console.warn('⚠️ Could not lock monitoring group (bot may not be admin):', err.message);
+  });
+}
 
 // Cleanup routine - remove expired conversations every 5 minutes
 setInterval(() => {
