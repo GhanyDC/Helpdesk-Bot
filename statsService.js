@@ -382,6 +382,155 @@ class StatsService {
     const options = { year: 'numeric', month: 'short', day: 'numeric' };
     return new Date().toLocaleDateString('en-US', options);
   }
+
+  /**
+   * Generate weekly staff performance report
+   * Shows each staff member's resolved, in-process, cancelled counts
+   * 
+   * @param {number} days - Number of days to look back (default: 7)
+   * @returns {string} - Formatted weekly report message
+   */
+  generateWeeklyStaffReport(days = 7) {
+    const staffStats = issueManager.getWeeklyStaffStats(days);
+    const weeklyIssues = issueManager.getWeeklyIssueStats(days);
+    const branchStats = issueManager.getWeeklyBranchStats(days);
+
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+
+    const formatDate = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+    let message = `📊 WEEKLY HELPDESK REPORT\n${formatDate(startDate)} — ${formatDate(endDate)}\n\n`;
+
+    // Overall summary
+    message += `OVERALL SUMMARY\n`;
+    message += `├─ Total Issues Created: ${weeklyIssues.totalCreated}\n`;
+    message += `├─ Resolved/Confirmed: ${weeklyIssues.totalResolved}\n`;
+    message += `├─ Cancelled: ${weeklyIssues.totalCancelled}\n`;
+    message += `├─ Still Open (this week): ${weeklyIssues.totalOpenThisWeek}\n`;
+    message += `├─ Total Open (all time): ${weeklyIssues.totalOpenOverall}\n`;
+    message += `└─ Resolution Rate: ${weeklyIssues.resolutionRate}%\n\n`;
+
+    // Branch breakdown
+    if (branchStats.length > 0) {
+      message += `🏢 BY BRANCH\n`;
+      branchStats.forEach((branch, index) => {
+        const prefix = index === branchStats.length - 1 ? '└─' : '├─';
+        const rate = branch.total > 0 ? Math.round((branch.resolved / branch.total) * 100) : 0;
+        message += `${prefix} ${branch.branch}: ${branch.total} total | ${branch.resolved} resolved | ${branch.open} open | ${rate}%\n`;
+      });
+      message += `\n`;
+    }
+
+    // Staff performance
+    if (staffStats.length > 0) {
+      message += `👥 STAFF PERFORMANCE\n`;
+      staffStats.forEach((staff, index) => {
+        const name = staff.updated_by_name || staff.updated_by || 'Unknown';
+        const prefix = index === staffStats.length - 1 ? '└─' : '├─';
+        message += `${prefix} ${name}\n`;
+
+        const spacing = index === staffStats.length - 1 ? '  ' : '│ ';
+        message += `${spacing}  Resolved: ${staff.resolved} | In Process: ${staff.in_process} | Cancelled: ${staff.cancelled} | Total Actions: ${staff.total_actions}\n`;
+      });
+    } else {
+      message += `👥 STAFF PERFORMANCE\nNo staff activity recorded this week.\n`;
+    }
+
+    return message.trim();
+  }
+
+  /**
+   * Generate weekly report for a specific branch
+   * 
+   * @param {string} branch - Branch name
+   * @param {number} days - Number of days to look back
+   * @returns {string} - Formatted branch weekly report
+   */
+  generateBranchWeeklyReport(branch, days = 7) {
+    const staffStats = issueManager.getWeeklyStaffStats(days);
+    const allIssues = issueManager.getAllIssues({});
+
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - days);
+    const cutoffStr = cutoffDate.toISOString().replace('T', ' ').slice(0, 19);
+
+    const branchIssues = allIssues.filter(i => i.branch === branch && i.created_at >= cutoffStr);
+    const total = branchIssues.length;
+    const resolved = branchIssues.filter(i => isClosedStatus(i.status)).length;
+    const open = branchIssues.filter(i => isOpenStatus(i.status)).length;
+    const cancelled = branchIssues.filter(i => ['cancelled-staff', 'cancelled-user'].includes(i.status)).length;
+    const rate = total > 0 ? Math.round((resolved / total) * 100) : 0;
+
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    const formatDate = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+    let message = `📊 WEEKLY REPORT — ${branch} BRANCH\n${formatDate(startDate)} — ${formatDate(endDate)}\n\n`;
+
+    message += `SUMMARY\n`;
+    message += `├─ Total Issues: ${total}\n`;
+    message += `├─ Resolved: ${resolved}\n`;
+    message += `├─ Cancelled: ${cancelled}\n`;
+    message += `├─ Still Open: ${open}\n`;
+    message += `└─ Resolution Rate: ${rate}%\n\n`;
+
+    // Staff who handled this branch's tickets
+    // Filter staff by checking if they handled tickets for this branch
+    if (staffStats.length > 0) {
+      message += `👥 STAFF ACTIVITY\n`;
+      let hasStaff = false;
+      staffStats.forEach((staff, index) => {
+        const name = staff.updated_by_name || staff.updated_by || 'Unknown';
+        const prefix = index === staffStats.length - 1 ? '└─' : '├─';
+        message += `${prefix} ${name}: ${staff.resolved} resolved, ${staff.total_actions} actions\n`;
+        hasStaff = true;
+      });
+      if (!hasStaff) {
+        message += `No staff activity recorded.\n`;
+      }
+    }
+
+    return message.trim();
+  }
+
+  /**
+   * Format department-specific statistics
+   * Shows stats filtered by department
+   * 
+   * @param {string} department - Department name
+   * @returns {string} - Formatted message
+   */
+  formatDepartmentStatsMessage(department) {
+    const today = this.getTodayDateString();
+    const allIssues = issueManager.getAllIssues({});
+    
+    // Filter by department
+    const deptIssues = allIssues.filter(i => i.department === department);
+    const todayDeptIssues = deptIssues.filter(i => i.created_at.split(' ')[0] === today);
+
+    const todayTotal = todayDeptIssues.length;
+    const todayOpen = todayDeptIssues.filter(i => isOpenStatus(i.status)).length;
+    const todayResolved = todayDeptIssues.filter(i => isClosedStatus(i.status)).length;
+
+    const allTimeTotal = deptIssues.length;
+    const allTimeOpen = deptIssues.filter(i => isOpenStatus(i.status)).length;
+
+    let message = `📊 ${department.toUpperCase()} DEPARTMENT STATISTICS\n\n`;
+    
+    message += `TODAY (${this.getFormattedDate()}):\n`;
+    message += `├─ Total Issues: ${todayTotal}\n`;
+    message += `├─ Open: ${todayOpen}\n`;
+    message += `└─ Resolved: ${todayResolved}\n\n`;
+    
+    message += `ALL TIME:\n`;
+    message += `├─ Total Issues: ${allTimeTotal}\n`;
+    message += `└─ Currently Open: ${allTimeOpen}`;
+
+    return message.trim();
+  }
 }
 
 // Export singleton instance

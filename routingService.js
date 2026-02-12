@@ -255,6 +255,7 @@ Created: ${new Date(issue.createdAt).toLocaleString()}
    * @param {string} oldStatus - Previous status
    * @param {string} newStatus - New status
    * @param {string} updatedBy - Name of person who updated
+   * @param {string} remarks - Optional remarks
    */
   async notifyStatusUpdate(issue, oldStatus, newStatus, updatedBy, remarks = '') {
     // Notify the employee who created the issue
@@ -269,25 +270,35 @@ Created: ${new Date(issue.createdAt).toLocaleString()}
       );
     }
 
+    // Notify branch support group for terminal statuses (confirmed, cancelled)
+    // So support staff can see the ticket is now fully closed
+    const terminalStatuses = ['confirmed', 'cancelled-staff', 'cancelled-user'];
+    if (terminalStatuses.includes(newStatus)) {
+      await this.notifyBranchGroupClosed(issue, oldStatus, newStatus, updatedBy, remarks);
+    }
+
     // Notify central monitoring (if enabled)
     if (this.enableCentralMonitoring && this.centralMonitoringGroup) {
       let updateMessage = '';
       
       // For resolved/closed status, send detailed branch metrics
-      if (newStatus === 'resolved' || newStatus === 'resolved-with-issues' || newStatus === 'closed') {
+      if (newStatus === 'resolved' || newStatus === 'resolved-with-issues' || newStatus === 'closed' || newStatus === 'confirmed') {
         const branchStats = this.getBranchStatsToday(issue.branch);
         const yesterdayStats = this.getBranchStatsYesterday(issue.branch);
         const avgResponseTime = this.getAverageResponseTime(issue.branch);
         
+        const statusEmoji = newStatus === 'confirmed' ? '✅' : newStatus.startsWith('cancelled') ? '❌' : '✅';
+        const statusAction = newStatus === 'confirmed' ? 'CONFIRMED & CLOSED' : 'RESOLVED';
+
         let resolvedMsg = `[📊 MONITORING - Read Only]
 
-✅ ISSUE RESOLVED
+${statusEmoji} ISSUE ${statusAction}
 
 📋 Issue: ${issue.issue_id}
 🏢 Branch: ${issue.branch}
 Department: ${issue.department}
 ⚠️ Urgency: ${issue.urgency}
-Resolved by: ${updatedBy}`;
+${newStatus === 'confirmed' ? 'Confirmed by' : 'Resolved by'}: ${updatedBy}`;
 
         if (remarks) {
           resolvedMsg += `\n\n📝 Remarks:\n${remarks}`;
@@ -296,6 +307,24 @@ Resolved by: ${updatedBy}`;
         resolvedMsg += `\n\n━━━━━━━━━━━━━━━━━━━\n📊 ${issue.branch} BRANCH METRICS TODAY:\n├─ Total Issues: ${branchStats.total} (${this.getChangeIndicator(branchStats.total, yesterdayStats.total)} from yesterday: ${yesterdayStats.total})\n├─ Open Issues: ${branchStats.open}\n├─ Resolved Today: ${branchStats.resolved}\n└─ Avg Response Time: ${avgResponseTime}`;
 
         updateMessage = resolvedMsg;
+      } else if (newStatus === 'cancelled-staff' || newStatus === 'cancelled-user') {
+        const cancelledBy = newStatus === 'cancelled-user' ? 'Employee' : 'Staff';
+        let cancelMsg = `[📊 MONITORING - Read Only]
+
+❌ ISSUE CANCELLED
+
+📋 Issue: ${issue.issue_id}
+🏢 Branch: ${issue.branch}
+Department: ${issue.department}
+⚠️ Urgency: ${issue.urgency}
+Cancelled by: ${updatedBy} (${cancelledBy})`;
+
+        if (remarks) {
+          cancelMsg += `\n\n📝 Reason:\n${remarks}`;
+        }
+
+        cancelMsg += `\n⏰ ${new Date().toLocaleString()}`;
+        updateMessage = cancelMsg;
       } else {
         // For other status updates, send simple notification
         updateMessage = `[📊 MONITORING - Read Only]
@@ -312,6 +341,67 @@ Updated by: ${updatedBy}\n⏰ ${new Date().toLocaleString()}`;
 
       await messagingAdapter.sendGroupMessage(this.centralMonitoringGroup, updateMessage);
     }
+  }
+
+  /**
+   * Notify the branch support group when a ticket reaches terminal status
+   * (confirmed, cancelled-staff, cancelled-user)
+   * So support staff can see the ticket is fully closed
+   * 
+   * @param {object} issue - Issue object
+   * @param {string} oldStatus - Previous status
+   * @param {string} newStatus - New terminal status
+   * @param {string} updatedBy - Who made the update
+   * @param {string} remarks - Optional remarks/reason
+   */
+  async notifyBranchGroupClosed(issue, oldStatus, newStatus, updatedBy, remarks = '') {
+    const branch = issue.branch;
+    const targetGroup = this.branchGroups[branch] || this.fallbackGroupId;
+
+    if (!targetGroup) {
+      console.log(`[RoutingService] No branch group for ${branch}, cannot notify closure`);
+      return;
+    }
+
+    let emoji, title;
+    if (newStatus === 'confirmed') {
+      emoji = '✅';
+      title = 'TICKET CONFIRMED & CLOSED';
+    } else if (newStatus === 'cancelled-user') {
+      emoji = '❌';
+      title = 'TICKET CANCELLED BY EMPLOYEE';
+    } else if (newStatus === 'cancelled-staff') {
+      emoji = '❌';
+      title = 'TICKET CANCELLED BY STAFF';
+    } else {
+      emoji = '📋';
+      title = 'TICKET CLOSED';
+    }
+
+    let message = `${emoji} ${title}
+
+📋 Issue ID: ${issue.issue_id}
+🏢 Branch: ${issue.branch}
+Department: ${issue.department}
+Employee: ${issue.employee_name}
+Category: ${issue.category}
+⚠️ Urgency: ${issue.urgency}
+
+📊 Status: ${oldStatus} → ${newStatus}
+👤 ${newStatus === 'confirmed' ? 'Confirmed by' : 'Updated by'}: ${updatedBy}`;
+
+    if (issue.assigned_to_name) {
+      message += `\n👤 Assigned to: ${issue.assigned_to_name}`;
+    }
+
+    if (remarks) {
+      message += `\n\n📝 ${newStatus === 'cancelled-staff' ? 'Reason' : 'Remarks'}:\n${remarks}`;
+    }
+
+    message += `\n\n⏰ ${new Date().toLocaleString()}`;
+
+    await messagingAdapter.sendGroupMessage(targetGroup, message);
+    console.log(`[RoutingService] Notified ${branch} branch group of ticket closure: ${issue.issue_id}`);
   }
 
   /**
@@ -405,8 +495,12 @@ Department: ${issue.department}
       });
 
       const total = yesterdayIssues.length;
-      const resolved = yesterdayIssues.filter(i => i.status === 'RESOLVED').length;
-      const open = yesterdayIssues.filter(i => i.status !== 'RESOLVED').length;
+      const resolved = yesterdayIssues.filter(i => 
+        ['resolved', 'resolved-with-issues', 'confirmed', 'closed'].includes(i.status)
+      ).length;
+      const open = yesterdayIssues.filter(i => 
+        !['resolved', 'resolved-with-issues', 'confirmed', 'closed', 'cancelled-staff', 'cancelled-user'].includes(i.status)
+      ).length;
 
       return { total, open, resolved };
     } catch (error) {

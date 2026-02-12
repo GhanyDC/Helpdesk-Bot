@@ -31,6 +31,7 @@ const routingService = require('./routingService');
 class SchedulerService {
   constructor() {
     this.reportSent = false;
+    this.weeklyReportSent = false;
     this.checkInterval = null;
     this.autoCloseInterval = null;
     
@@ -38,10 +39,16 @@ class SchedulerService {
     this.reportHour = parseInt(process.env.DAILY_REPORT_HOUR || '18', 10);
     this.reportMinute = parseInt(process.env.DAILY_REPORT_MINUTE || '0', 10);
     
+    // Weekly report: Monday at 9:00 AM (configurable)
+    this.weeklyReportDay = parseInt(process.env.WEEKLY_REPORT_DAY || '1', 10); // 0=Sunday, 1=Monday
+    this.weeklyReportHour = parseInt(process.env.WEEKLY_REPORT_HOUR || '9', 10);
+    this.weeklyReportMinute = parseInt(process.env.WEEKLY_REPORT_MINUTE || '0', 10);
+    
     // Auto-close resolved tickets after 7 days without employee response
     this.autoCloseDays = parseInt(process.env.AUTO_CLOSE_DAYS || '7', 10);
     
     console.log(`[SchedulerService] Daily report scheduled for ${this.reportHour}:${String(this.reportMinute).padStart(2, '0')}`);
+    console.log(`[SchedulerService] Weekly report scheduled for Day ${this.weeklyReportDay} at ${this.weeklyReportHour}:${String(this.weeklyReportMinute).padStart(2, '0')}`);
     console.log(`[SchedulerService] Auto-close after ${this.autoCloseDays} days`);
   }
 
@@ -89,7 +96,7 @@ class SchedulerService {
     const currentHour = now.getHours();
     const currentMinute = now.getMinutes();
 
-    // Check if it's the scheduled time
+    // Check if it's the scheduled time for daily report
     if (currentHour === this.reportHour && currentMinute === this.reportMinute) {
       // Only send once per day
       if (!this.reportSent) {
@@ -97,9 +104,23 @@ class SchedulerService {
         this.reportSent = true;
       }
     } else {
-      // Reset flag at midnight
+      // Reset flag when time passes
       if (currentHour === 0 && currentMinute === 0) {
         this.reportSent = false;
+      }
+    }
+
+    // Check if it's time for weekly report
+    const currentDay = now.getDay(); // 0=Sunday, 1=Monday...
+    if (currentDay === this.weeklyReportDay && currentHour === this.weeklyReportHour && currentMinute === this.weeklyReportMinute) {
+      if (!this.weeklyReportSent) {
+        await this.sendWeeklyReport();
+        this.weeklyReportSent = true;
+      }
+    } else {
+      // Reset weekly flag after the scheduled time passes
+      if (currentDay !== this.weeklyReportDay || currentHour !== this.weeklyReportHour) {
+        this.weeklyReportSent = false;
       }
     }
   }
@@ -136,6 +157,49 @@ class SchedulerService {
   async sendReportNow() {
     console.log('[SchedulerService] Sending report immediately (manual trigger)');
     await this.sendDailyReport();
+  }
+
+  /**
+   * Send weekly staff performance report to central monitoring AND all branch groups
+   */
+  async sendWeeklyReport() {
+    try {
+      console.log('[SchedulerService] Generating weekly report...');
+
+      // Send to central monitoring (full report with all staff)
+      if (config.support.enableCentralMonitoring && config.support.centralMonitoringGroup) {
+        const fullReport = statsService.generateWeeklyStaffReport(7);
+        const monitoringReport = `[📊 MONITORING - Read Only]\n\n${fullReport}`;
+        await messagingAdapter.sendGroupMessage(config.support.centralMonitoringGroup, monitoringReport);
+        console.log('[SchedulerService] Weekly report sent to central monitoring');
+      }
+
+      // Send to each branch group (branch-specific report)
+      const branchGroups = config.support.branchGroups || {};
+      for (const [branch, groupId] of Object.entries(branchGroups)) {
+        if (groupId) {
+          try {
+            const branchReport = statsService.generateBranchWeeklyReport(branch, 7);
+            await messagingAdapter.sendGroupMessage(groupId, branchReport);
+            console.log(`[SchedulerService] Weekly report sent to ${branch} branch group`);
+          } catch (error) {
+            console.error(`[SchedulerService] Error sending weekly report to ${branch}:`, error);
+          }
+        }
+      }
+
+      console.log('[SchedulerService] Weekly reports sent successfully');
+    } catch (error) {
+      console.error('[SchedulerService] Error sending weekly report:', error);
+    }
+  }
+
+  /**
+   * Send weekly report immediately (for testing)
+   */
+  async sendWeeklyReportNow() {
+    console.log('[SchedulerService] Sending weekly report immediately (manual trigger)');
+    await this.sendWeeklyReport();
   }
 
   /**

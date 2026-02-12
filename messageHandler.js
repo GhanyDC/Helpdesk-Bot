@@ -20,7 +20,8 @@ const { CONVERSATION_STEPS, SUPPORT_KEYWORDS, ISSUE_STATUS, STATUS_LABELS, TERMI
 class MessageHandler {
   constructor() {
     // Tracks pending remarks from support staff
-    // Key: `${chatId}_${userId}`, Value: { issueId, statusCode, messageId, timestamp }
+    // Key: `${chatId}_${userId}`, Value: Array of { issueId, statusCode, messageId, timestamp }
+    // Queue-based: supports multiple resolve clicks before typing remarks
     this.pendingRemarks = new Map();
 
     // Cleanup stale pending remarks every 10 minutes
@@ -54,7 +55,8 @@ class MessageHandler {
     // ── SUPPORT GROUP: Check for pending remarks ──
     if (isGroupChat && !messageText.startsWith('/')) {
       const remarksKey = `${chatId}_${userId}`;
-      if (this.pendingRemarks.has(remarksKey)) {
+      const queue = this.pendingRemarks.get(remarksKey);
+      if (queue && queue.length > 0) {
         await this.processRemarks(remarksKey, messageText, userId, chatId, userName);
         return;
       }
@@ -63,9 +65,18 @@ class MessageHandler {
     // Handle /cancel_remarks command in groups
     if (isGroupChat && messageText.toLowerCase() === '/cancel_remarks') {
       const remarksKey = `${chatId}_${userId}`;
-      if (this.pendingRemarks.has(remarksKey)) {
-        this.pendingRemarks.delete(remarksKey);
-        await messagingAdapter.sendMessage(chatId, '❌ Remarks cancelled. Status was not updated.');
+      const queue = this.pendingRemarks.get(remarksKey);
+      if (queue && queue.length > 0) {
+        const cancelled = queue.shift();
+        if (queue.length === 0) this.pendingRemarks.delete(remarksKey);
+        await messagingAdapter.sendMessage(chatId, `❌ Remarks for ${cancelled.issueId} cancelled. Status was not updated.`);
+        // Prompt for next in queue
+        if (queue.length > 0) {
+          const next = queue[0];
+          const nextIssue = issueManager.getIssue(next.issueId);
+          const description = nextIssue ? nextIssue.description : 'N/A';
+          await messagingAdapter.sendMessage(chatId, `📝 REMARKS REQUIRED\n\n📋 Issue: ${next.issueId}\n\n📄 Subject:\n${description}\n\nPlease REPLY to this message with your remarks for this ticket.\n\n⚠️ Important: Use the REPLY function to respond to this message.\n\n💡 Type /cancel_remarks to skip`);
+        }
       }
       return;
     }
@@ -175,6 +186,7 @@ class MessageHandler {
 
   /**
    * Handle /stats command
+   * Supports: /stats (overall), /stats <branch>, /stats <department>
    * @param {array} parts - Command parts
    * @param {string} chatId - Chat ID
    */
@@ -184,12 +196,22 @@ class MessageHandler {
       const message = statsService.formatTodayStatsMessage();
       await messagingAdapter.sendMessage(chatId, message);
     } else {
-      // /stats <department> - show department-specific stats
-      const deptInput = parts.slice(1).join(' ');
+      const input = parts.slice(1).join(' ');
+
+      // Try to match branch first (case-insensitive)
+      const matchedBranch = Object.values(BRANCHES).find(
+        branch => branch.toLowerCase() === input.toLowerCase()
+      );
+
+      if (matchedBranch) {
+        const message = statsService.formatBranchStatsMessage(matchedBranch);
+        await messagingAdapter.sendMessage(chatId, message);
+        return;
+      }
       
       // Try to match department (case-insensitive)
       const matchedDept = Object.values(DEPARTMENTS).find(
-        dept => dept.toLowerCase() === deptInput.toLowerCase()
+        dept => dept.toLowerCase() === input.toLowerCase()
       );
 
       if (matchedDept) {
@@ -198,7 +220,7 @@ class MessageHandler {
       } else {
         await messagingAdapter.sendMessage(
           chatId,
-          `❌ Unknown department: "${deptInput}"\n\nAvailable departments:\n${Object.values(DEPARTMENTS).join(', ')}`
+          `❌ Unknown branch or department: "${input}"\n\nBranches: ${Object.values(BRANCHES).join(', ')}\nDepartments: ${Object.values(DEPARTMENTS).join(', ')}`
         );
       }
     }
@@ -222,6 +244,7 @@ class MessageHandler {
 
 📊 Reports & Statistics
 /stats — Today's overall statistics
+/stats JHQ — Branch-specific stats
 /stats Sales — Department-specific stats
 /open_issues — All open issues by branch
 
@@ -376,6 +399,15 @@ Select new status below:`,
         return;
       }
 
+      // Check ticket ownership: if assigned, only the assigned staff can update
+      if (issue.assigned_to && issue.assigned_to !== userId) {
+        await messagingAdapter.sendMessage(
+          chatId,
+          `❌ This ticket is assigned to ${issue.assigned_to_name || 'another staff member'}. Only they can update it.`
+        );
+        return;
+      }
+
       const oldStatus = issue.status;
 
       // For resolve statuses, require remarks as additional text
@@ -489,30 +521,51 @@ Select new status below:`,
       return;
     }
 
-    // ── RESOLVE requires remarks ──
-    if (newStatus === ISSUE_STATUS.RESOLVED || newStatus === ISSUE_STATUS.RESOLVED_WITH_ISSUES) {
+    // Check ticket ownership: if assigned, only the assigned staff can update
+    if (issue.assigned_to && issue.assigned_to !== userId) {
+      await messagingAdapter.answerCallbackQuery(
+        callbackQueryId, 
+        `❌ This ticket is assigned to ${issue.assigned_to_name || 'another staff member'}. Only they can update it.`,
+        true
+      );
+      return;
+    }
+
+    // ── RESOLVE or CANCEL (STAFF) requires remarks ──
+    if (newStatus === ISSUE_STATUS.RESOLVED || newStatus === ISSUE_STATUS.RESOLVED_WITH_ISSUES || newStatus === ISSUE_STATUS.CANCELLED_STAFF) {
       // Store pending state — next message from this user in this group = remarks
       const remarksKey = `${chatId}_${userId}`;
-      this.pendingRemarks.set(remarksKey, {
+      const isCancellation = newStatus === ISSUE_STATUS.CANCELLED_STAFF;
+      const entry = {
         issueId,
         statusCode,
         newStatus,
         messageId,
         oldStatus: issue.status,
+        description: issue.description,
+        isCancellation,
         timestamp: Date.now(),
-      });
+      };
 
-      await messagingAdapter.answerCallbackQuery(callbackQueryId, '📝 Please type your remarks now');
+      // Queue-based: push to array so multiple resolves don't overwrite each other
+      if (!this.pendingRemarks.has(remarksKey)) {
+        this.pendingRemarks.set(remarksKey, []);
+      }
+      const queue = this.pendingRemarks.get(remarksKey);
+      queue.push(entry);
 
-      await messagingAdapter.sendMessage(chatId, `📝 REMARKS REQUIRED
+      await messagingAdapter.answerCallbackQuery(callbackQueryId, isCancellation ? '📝 Please provide a reason for cancellation' : '📝 Please type your remarks now');
 
-📋 Issue: ${issueId}
-
-@${userName}, please type your remarks describing what was done to resolve this issue.
-
-Your next message will be saved as the resolution remarks.
-
-💡 Type /cancel_remarks to abort`);
+      // Only show the prompt if this is the first (or only) item in queue
+      if (queue.length === 1) {
+        const promptTitle = isCancellation ? '📝 CANCELLATION REASON REQUIRED' : '📝 REMARKS REQUIRED';
+        const promptAction = isCancellation 
+          ? 'please REPLY to this message with the reason for cancelling this ticket.'
+          : 'please REPLY to this message with your remarks describing what was done to resolve this issue.';
+        await messagingAdapter.sendMessage(chatId, `${promptTitle}\n\n📋 Issue: ${issueId}\n\n📄 Subject:\n${issue.description}\n\n@${userName}, ${promptAction}\n\n⚠️ Important: Use the REPLY function to respond to this message.\n\n💡 Type /cancel_remarks to skip`);
+      } else {
+        await messagingAdapter.sendMessage(chatId, `📝 Queued: ${issueId} (${queue.length} tickets awaiting remarks)\n\nFinish remarks for ${queue[0].issueId} first, then this one will be next.`);
+      }
 
       return;
     }
@@ -542,21 +595,17 @@ Your next message will be saved as the resolution remarks.
   }
 
   /**
-   * Process remarks typed by support staff after clicking resolve
+   * Process remarks typed by support staff after clicking resolve or cancel
    */
   async processRemarks(remarksKey, remarks, userId, chatId, userName) {
-    const pending = this.pendingRemarks.get(remarksKey);
-    this.pendingRemarks.delete(remarksKey);
+    const queue = this.pendingRemarks.get(remarksKey);
+    if (!queue || queue.length === 0) return;
 
-    if (!pending) return;
+    // Take the first (oldest) pending item
+    const pending = queue.shift();
+    if (queue.length === 0) this.pendingRemarks.delete(remarksKey);
 
-    // Handle cancel
-    if (remarks.toLowerCase() === '/cancel_remarks') {
-      await messagingAdapter.sendMessage(chatId, '❌ Remarks cancelled. Status was not updated.');
-      return;
-    }
-
-    const { issueId, newStatus, messageId, oldStatus } = pending;
+    const { issueId, newStatus, messageId, oldStatus, isCancellation } = pending;
 
     // Update with remarks
     const success = issueManager.resolveWithRemarks(issueId, newStatus, remarks, userId, userName);
@@ -575,7 +624,7 @@ Your next message will be saved as the resolution remarks.
 📊 Status: ${STATUS_LABELS[oldStatus] || oldStatus} → ${statusLabel}
 👤 Updated by: ${userName}
 
-📝 Remarks:
+📝 ${isCancellation ? 'Reason' : 'Remarks'}:
 ${remarks}`);
 
     // Edit the original ticket message
@@ -585,10 +634,35 @@ ${remarks}`);
     // Notify employee and central monitoring
     await routingService.notifyStatusUpdate(issue, oldStatus, newStatus, userName, remarks);
 
-    // Send confirmation request to employee with remarks
-    await this.sendConfirmationRequest(issue, newStatus, userName, remarks);
+    if (isCancellation) {
+      // Notify employee that their ticket was cancelled with reason
+      await messagingAdapter.sendMessage(
+        issue.employee_id,
+        `❌ TICKET CANCELLED
 
-    console.log(`[MessageHandler] Resolved ${issueId} with remarks by ${userName}`);
+📋 Issue ID: ${issueId}
+👤 Cancelled by: ${userName}
+
+📝 Reason:
+${remarks}
+
+If you have questions, please contact our support team.
+To create a new ticket, send any message.`
+      );
+    } else {
+      // Send confirmation request to employee with remarks (for resolve)
+      await this.sendConfirmationRequest(issue, newStatus, userName, remarks);
+    }
+
+    console.log(`[MessageHandler] ${isCancellation ? 'Cancelled' : 'Resolved'} ${issueId} with remarks by ${userName}`);
+
+    // Prompt for next queued ticket if any remain
+    if (queue.length > 0) {
+      const next = queue[0];
+      const nextIssue = issueManager.getIssue(next.issueId);
+      const description = nextIssue ? nextIssue.description : 'N/A';
+      await messagingAdapter.sendMessage(chatId, `📝 REMARKS REQUIRED\n\n📋 Issue: ${next.issueId}\n\n📄 Subject:\n${description}\n\nPlease REPLY to this message with your remarks for this ticket.\n\n⚠️ Important: Use the REPLY function to respond to this message.\n\n💡 Type /cancel_remarks to skip`);
+    }
   }
 
   /**
@@ -597,10 +671,15 @@ ${remarks}`);
   cleanupPendingRemarks() {
     const now = Date.now();
     const maxAge = 15 * 60 * 1000; // 15 minutes
-    for (const [key, value] of this.pendingRemarks.entries()) {
-      if (now - value.timestamp > maxAge) {
+    for (const [key, queue] of this.pendingRemarks.entries()) {
+      // Filter out stale entries from the queue
+      const filtered = queue.filter(entry => now - entry.timestamp <= maxAge);
+      if (filtered.length === 0) {
         this.pendingRemarks.delete(key);
-        console.log(`[MessageHandler] Cleaned up stale pending remarks for ${key}`);
+        console.log(`[MessageHandler] Cleaned up all stale pending remarks for ${key}`);
+      } else if (filtered.length < queue.length) {
+        this.pendingRemarks.set(key, filtered);
+        console.log(`[MessageHandler] Cleaned up ${queue.length - filtered.length} stale remarks for ${key}`);
       }
     }
   }
@@ -758,6 +837,10 @@ ${issue.description}
 
 📊 Status: ${statusLabel}
 🔄 Updated by: ${updatedBy}`;
+
+    if (issue.assigned_to) {
+      text += `\n👤 Assigned to: ${issue.assigned_to_name || issue.assigned_to}`;
+    }
 
     if (remarks) {
       text += `\n\n📝 Remarks:\n${remarks}`;
@@ -1064,9 +1147,6 @@ Is this correct?`;
     }
   }
 
-  /**
-   * Submit the issue to the system
-   */
   /**
    * Submit the issue to the system
    * 
