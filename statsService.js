@@ -24,6 +24,7 @@
  */
 
 const issueManager = require('./issueManager');
+const logger = require('./logger');
 const { BRANCHES, TERMINAL_STATUSES } = require('./constants');
 
 // Helper: check if a status counts as "resolved/closed" for stats
@@ -36,14 +37,21 @@ function isOpenStatus(status) {
   return !isClosedStatus(status);
 }
 
+// Helper: extract YYYY-MM-DD from a Date object or string
+function toDateString(val) {
+  if (val instanceof Date) return val.toISOString().split('T')[0];
+  if (typeof val === 'string') return val.split('T')[0].split(' ')[0];
+  return '';
+}
+
 class StatsService {
   /**
    * Get overall statistics for today
    * @returns {object} - Today's statistics
    */
-  getTodayStats() {
+  async getTodayStats() {
     const today = this.getTodayDateString();
-    const allIssues = issueManager.getAllIssues({});
+    const allIssues = await issueManager.getAllIssues({});
     
     // Filter issues created today
     const todayIssues = allIssues.filter(issue => {
@@ -78,17 +86,18 @@ class StatsService {
    * Get statistics by BRANCH for today (CORRECTED)
    * @returns {array} - Array of branch stats
    */
-  getBranchStatsToday() {
+  async getBranchStatsToday() {
     const today = this.getTodayDateString();
     const branches = Object.values(BRANCHES);
     const stats = [];
+    const allIssues = await issueManager.getAllIssues({});
 
     branches.forEach(branch => {
-      const allIssues = issueManager.getAllIssues({});
-      
       // Filter by branch and today
       const branchIssues = allIssues.filter(issue => {
-        const issueDate = issue.created_at.split(' ')[0];
+        const issueDate = issue.created_at instanceof Date
+          ? issue.created_at.toISOString().split('T')[0]
+          : issue.created_at.split(' ')[0];
         const issueBranch = issue.branch || null;
         return issueDate === today && issueBranch === branch;
       });
@@ -116,12 +125,12 @@ class StatsService {
    * Get statistics by urgency for today
    * @returns {object} - Urgency breakdown
    */
-  getUrgencyStatsToday() {
+  async getUrgencyStatsToday() {
     const today = this.getTodayDateString();
-    const allIssues = issueManager.getAllIssues({});
+    const allIssues = await issueManager.getAllIssues({});
     
     const todayIssues = allIssues.filter(issue => {
-      const issueDate = issue.created_at.split(' ')[0];
+      const issueDate = toDateString(issue.created_at);
       return issueDate === today;
     });
 
@@ -146,8 +155,8 @@ class StatsService {
    * Get all open (unresolved) issues
    * @returns {array} - Open issues
    */
-  getOpenIssues() {
-    const allIssues = issueManager.getAllIssues({});
+  async getOpenIssues() {
+    const allIssues = await issueManager.getAllIssues({});
     return allIssues.filter(i => isOpenStatus(i.status));
   }
 
@@ -155,8 +164,8 @@ class StatsService {
    * Get open issues count by BRANCH (CORRECTED)
    * @returns {array} - Branch open issues
    */
-  getOpenIssuesByBranch() {
-    const openIssues = this.getOpenIssues();
+  async getOpenIssuesByBranch() {
+    const openIssues = await this.getOpenIssues();
     const branches = Object.values(BRANCHES);
     const stats = [];
 
@@ -190,14 +199,14 @@ class StatsService {
    * @param {string} branch - Branch name (JHQ/TRK/GS/IPIL)
    * @returns {object} - Branch statistics
    */
-  getBranchStats(branch) {
+  async getBranchStats(branch) {
     const today = this.getTodayDateString();
-    const allBranchIssues = issueManager.getAllIssues({});
+    const allBranchIssues = await issueManager.getAllIssues({});
     const branchIssues = allBranchIssues.filter(i => i.branch === branch);
     
     // Today's issues
     const todayIssues = branchIssues.filter(issue => {
-      const issueDate = issue.created_at.split(' ')[0];
+      const issueDate = toDateString(issue.created_at);
       return issueDate === today;
     });
 
@@ -222,10 +231,10 @@ class StatsService {
    * Format today's statistics as a message
    * @returns {string} - Formatted message
    */
-  formatTodayStatsMessage() {
-    const overall = this.getTodayStats();
-    const branchStats = this.getBranchStatsToday();  // CORRECTED: By branch
-    const urgencyStats = this.getUrgencyStatsToday();
+  async formatTodayStatsMessage() {
+    const overall = await this.getTodayStats();
+    const branchStats = await this.getBranchStatsToday();  // CORRECTED: By branch
+    const urgencyStats = await this.getUrgencyStatsToday();
 
     let message = `📊 HELPDESK STATISTICS - Today (${this.getFormattedDate()})\n\n`;
     
@@ -264,8 +273,8 @@ class StatsService {
    * Format open issues message
    * @returns {string} - Formatted message
    */
-  formatOpenIssuesMessage() {
-    const openByBranch = this.getOpenIssuesByBranch();  // CORRECTED: By branch
+  async formatOpenIssuesMessage() {
+    const openByBranch = await this.getOpenIssuesByBranch();  // CORRECTED: By branch
     const totalOpen = openByBranch.reduce((sum, branch) => sum + branch.total, 0);
 
     let message = `📋 OPEN ISSUES - ${this.getFormattedDate()}\n\nTotal Open: ${totalOpen}\n\n`;
@@ -299,8 +308,8 @@ class StatsService {
    * @param {string} branch - Branch name (JHQ/TRK/GS/IPIL)
    * @returns {string} - Formatted message
    */
-  formatBranchStatsMessage(branch) {
-    const stats = this.getBranchStats(branch);
+  async formatBranchStatsMessage(branch) {
+    const stats = await this.getBranchStats(branch);
     
     let message = `📊 ${branch} BRANCH STATISTICS\n\n`;
     
@@ -321,11 +330,11 @@ class StatsService {
    * Sent automatically at end of day
    * @returns {string} - Daily summary message
    */
-  generateDailySummary() {
-    const overall = this.getTodayStats();
-    const branchStats = this.getBranchStatsToday();  // CORRECTED: By branch
-    const urgencyStats = this.getUrgencyStatsToday();
-    const openByBranch = this.getOpenIssuesByBranch();  // CORRECTED: By branch
+  async generateDailySummary() {
+    const overall = await this.getTodayStats();
+    const branchStats = await this.getBranchStatsToday();  // CORRECTED: By branch
+    const urgencyStats = await this.getUrgencyStatsToday();
+    const openByBranch = await this.getOpenIssuesByBranch();  // CORRECTED: By branch
 
     let message = `📊 DAILY HELPDESK REPORT - ${this.getFormattedDate()}\n\n`;
     message += `OVERALL PERFORMANCE\n`;
@@ -390,10 +399,10 @@ class StatsService {
    * @param {number} days - Number of days to look back (default: 7)
    * @returns {string} - Formatted weekly report message
    */
-  generateWeeklyStaffReport(days = 7) {
-    const staffStats = issueManager.getWeeklyStaffStats(days);
-    const weeklyIssues = issueManager.getWeeklyIssueStats(days);
-    const branchStats = issueManager.getWeeklyBranchStats(days);
+  async generateWeeklyStaffReport(days = 7) {
+    const staffStats = await issueManager.getWeeklyStaffStats(days);
+    const weeklyIssues = await issueManager.getWeeklyIssueStats(days);
+    const branchStats = await issueManager.getWeeklyBranchStats(days);
 
     const endDate = new Date();
     const startDate = new Date();
@@ -448,9 +457,9 @@ class StatsService {
    * @param {number} days - Number of days to look back
    * @returns {string} - Formatted branch weekly report
    */
-  generateBranchWeeklyReport(branch, days = 7) {
-    const staffStats = issueManager.getWeeklyStaffStats(days);
-    const allIssues = issueManager.getAllIssues({});
+  async generateBranchWeeklyReport(branch, days = 7) {
+    const staffStats = await issueManager.getWeeklyStaffStats(days);
+    const allIssues = await issueManager.getAllIssues({});
 
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - days);
@@ -503,13 +512,13 @@ class StatsService {
    * @param {string} department - Department name
    * @returns {string} - Formatted message
    */
-  formatDepartmentStatsMessage(department) {
+  async formatDepartmentStatsMessage(department) {
     const today = this.getTodayDateString();
-    const allIssues = issueManager.getAllIssues({});
+    const allIssues = await issueManager.getAllIssues({});
     
     // Filter by department
     const deptIssues = allIssues.filter(i => i.department === department);
-    const todayDeptIssues = deptIssues.filter(i => i.created_at.split(' ')[0] === today);
+    const todayDeptIssues = deptIssues.filter(i => toDateString(i.created_at) === today);
 
     const todayTotal = todayDeptIssues.length;
     const todayOpen = todayDeptIssues.filter(i => isOpenStatus(i.status)).length;

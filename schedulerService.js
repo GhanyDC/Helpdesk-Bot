@@ -23,6 +23,7 @@
  */
 
 const config = require('./config');
+const logger = require('./logger');
 const statsService = require('./statsService');
 const messagingAdapter = require('./messagingAdapter');
 const issueManager = require('./issueManager');
@@ -47,9 +48,9 @@ class SchedulerService {
     // Auto-close resolved tickets after 7 days without employee response
     this.autoCloseDays = parseInt(process.env.AUTO_CLOSE_DAYS || '7', 10);
     
-    console.log(`[SchedulerService] Daily report scheduled for ${this.reportHour}:${String(this.reportMinute).padStart(2, '0')}`);
-    console.log(`[SchedulerService] Weekly report scheduled for Day ${this.weeklyReportDay} at ${this.weeklyReportHour}:${String(this.weeklyReportMinute).padStart(2, '0')}`);
-    console.log(`[SchedulerService] Auto-close after ${this.autoCloseDays} days`);
+    logger.info(`[SchedulerService] Daily report scheduled for ${this.reportHour}:${String(this.reportMinute).padStart(2, '0')}`);
+    logger.info(`[SchedulerService] Weekly report scheduled for Day ${this.weeklyReportDay} at ${this.weeklyReportHour}:${String(this.weeklyReportMinute).padStart(2, '0')}`);
+    logger.info(`[SchedulerService] Auto-close after ${this.autoCloseDays} days`);
   }
 
   /**
@@ -72,7 +73,7 @@ class SchedulerService {
       this.checkAutoClose();
     }, 30 * 1000);
 
-    console.log('[SchedulerService] Started');
+    logger.info('[SchedulerService] Started');
   }
 
   /**
@@ -85,7 +86,7 @@ class SchedulerService {
     if (this.autoCloseInterval) {
       clearInterval(this.autoCloseInterval);
     }
-    console.log('[SchedulerService] Stopped');
+    logger.info('[SchedulerService] Stopped');
   }
 
   /**
@@ -131,23 +132,23 @@ class SchedulerService {
   async sendDailyReport() {
     // Check if central monitoring is enabled
     if (!config.support.enableCentralMonitoring || !config.support.centralMonitoringGroup) {
-      console.log('[SchedulerService] Daily report not sent - central monitoring not configured');
+      logger.info('[SchedulerService] Daily report not sent - central monitoring not configured');
       return;
     }
 
     try {
-      console.log('[SchedulerService] Generating daily report...');
+      logger.info('[SchedulerService] Generating daily report...');
       
-      const report = statsService.generateDailySummary();
+      const report = await statsService.generateDailySummary();
       
       await messagingAdapter.sendGroupMessage(
         config.support.centralMonitoringGroup,
         report
       );
 
-      console.log('[SchedulerService] Daily report sent successfully');
+      logger.info('[SchedulerService] Daily report sent successfully');
     } catch (error) {
-      console.error('[SchedulerService] Error sending daily report:', error);
+      logger.error('[SchedulerService] Error sending daily report:', error);
     }
   }
 
@@ -155,7 +156,7 @@ class SchedulerService {
    * Send report immediately (for testing)
    */
   async sendReportNow() {
-    console.log('[SchedulerService] Sending report immediately (manual trigger)');
+    logger.info('[SchedulerService] Sending report immediately (manual trigger)');
     await this.sendDailyReport();
   }
 
@@ -164,14 +165,14 @@ class SchedulerService {
    */
   async sendWeeklyReport() {
     try {
-      console.log('[SchedulerService] Generating weekly report...');
+      logger.info('[SchedulerService] Generating weekly report...');
 
       // Send to central monitoring (full report with all staff)
       if (config.support.enableCentralMonitoring && config.support.centralMonitoringGroup) {
-        const fullReport = statsService.generateWeeklyStaffReport(7);
+        const fullReport = await statsService.generateWeeklyStaffReport(7);
         const monitoringReport = `[📊 MONITORING - Read Only]\n\n${fullReport}`;
         await messagingAdapter.sendGroupMessage(config.support.centralMonitoringGroup, monitoringReport);
-        console.log('[SchedulerService] Weekly report sent to central monitoring');
+        logger.info('[SchedulerService] Weekly report sent to central monitoring');
       }
 
       // Send to each branch group (branch-specific report)
@@ -179,18 +180,18 @@ class SchedulerService {
       for (const [branch, groupId] of Object.entries(branchGroups)) {
         if (groupId) {
           try {
-            const branchReport = statsService.generateBranchWeeklyReport(branch, 7);
+            const branchReport = await statsService.generateBranchWeeklyReport(branch, 7);
             await messagingAdapter.sendGroupMessage(groupId, branchReport);
-            console.log(`[SchedulerService] Weekly report sent to ${branch} branch group`);
+            logger.info(`[SchedulerService] Weekly report sent to ${branch} branch group`);
           } catch (error) {
-            console.error(`[SchedulerService] Error sending weekly report to ${branch}:`, error);
+            logger.error(`[SchedulerService] Error sending weekly report to ${branch}:`, error);
           }
         }
       }
 
-      console.log('[SchedulerService] Weekly reports sent successfully');
+      logger.info('[SchedulerService] Weekly reports sent successfully');
     } catch (error) {
-      console.error('[SchedulerService] Error sending weekly report:', error);
+      logger.error('[SchedulerService] Error sending weekly report:', error);
     }
   }
 
@@ -198,7 +199,7 @@ class SchedulerService {
    * Send weekly report immediately (for testing)
    */
   async sendWeeklyReportNow() {
-    console.log('[SchedulerService] Sending weekly report immediately (manual trigger)');
+    logger.info('[SchedulerService] Sending weekly report immediately (manual trigger)');
     await this.sendWeeklyReport();
   }
 
@@ -209,17 +210,17 @@ class SchedulerService {
    */
   async checkAutoClose() {
     try {
-      const issues = issueManager.getUnconfirmedResolvedIssues(this.autoCloseDays);
+      const issues = await issueManager.getUnconfirmedResolvedIssues(this.autoCloseDays);
 
       if (issues.length === 0) {
         return;
       }
 
-      console.log(`[SchedulerService] Found ${issues.length} ticket(s) eligible for auto-confirmation`);
+      logger.info(`[SchedulerService] Found ${issues.length} ticket(s) eligible for auto-confirmation`);
 
       for (const issue of issues) {
         const oldStatus = issue.status;
-        const success = issueManager.updateIssueStatus(
+        const success = await issueManager.updateIssueStatus(
           issue.issue_id,
           'confirmed',
           'SYSTEM',
@@ -241,11 +242,11 @@ class SchedulerService {
             'System (Auto-Confirm)'
           );
 
-          console.log(`[SchedulerService] Auto-confirmed: ${issue.issue_id}`);
+          logger.info(`[SchedulerService] Auto-confirmed: ${issue.issue_id}`);
         }
       }
     } catch (error) {
-      console.error('[SchedulerService] Error during auto-close check:', error);
+      logger.error('[SchedulerService] Error during auto-close check:', error);
     }
   }
 }

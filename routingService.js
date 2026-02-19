@@ -31,6 +31,7 @@
  */
 
 const config = require('./config');
+const logger = require('./logger');
 const messagingAdapter = require('./messagingAdapter');
 const issueManager = require('./issueManager');
 
@@ -41,9 +42,9 @@ class RoutingService {
     this.enableCentralMonitoring = config.support.enableCentralMonitoring;
     this.fallbackGroupId = config.support.groupId;
 
-    console.log('[RoutingService] Initialized');
-    console.log(`[RoutingService] Branch groups configured: ${Object.keys(this.branchGroups).length}`);
-    console.log(`[RoutingService] Central monitoring: ${this.enableCentralMonitoring ? 'ENABLED' : 'DISABLED'}`);
+    logger.info('[RoutingService] Initialized');
+    logger.info(`[RoutingService] Branch groups configured: ${Object.keys(this.branchGroups).length}`);
+    logger.info(`[RoutingService] Central monitoring: ${this.enableCentralMonitoring ? 'ENABLED' : 'DISABLED'}`);
   }
 
   /**
@@ -57,7 +58,7 @@ class RoutingService {
    * @param {object} issue - Issue object with branch, department, urgency, etc.
    */
   async routeIssue(issue) {
-    console.log(`[RoutingService] Routing issue ${issue.issueId} (Branch: ${issue.branch}, Department: ${issue.department})`);
+    logger.info(`[RoutingService] Routing issue ${issue.issueId} (Branch: ${issue.branch}, Department: ${issue.department})`);
 
     // Primary Route: Branch-specific action group
     await this.sendToActionGroup(issue);
@@ -81,15 +82,15 @@ class RoutingService {
     // Try to find branch-specific group
     if (this.branchGroups[branch]) {
       targetGroup = this.branchGroups[branch];
-      console.log(`[RoutingService] Found branch group for ${branch}: ${targetGroup}`);
+      logger.info(`[RoutingService] Found branch group for ${branch}: ${targetGroup}`);
     } else {
       // Fallback to legacy single group
       targetGroup = this.fallbackGroupId;
-      console.log(`[RoutingService] No branch group for ${branch}, using fallback: ${targetGroup}`);
+      logger.info(`[RoutingService] No branch group for ${branch}, using fallback: ${targetGroup}`);
     }
 
     if (!targetGroup) {
-      console.error(`[RoutingService] No support group configured for branch ${branch} and no fallback group`);
+      logger.error(`[RoutingService] No support group configured for branch ${branch} and no fallback group`);
       return;
     }
 
@@ -98,7 +99,7 @@ class RoutingService {
     const buttons = this.getInitialStatusButtons(issue.issueId);
     await messagingAdapter.sendInlineKeyboard(targetGroup, message, buttons);
 
-    console.log(`[RoutingService] Sent action message with buttons to ${branch} branch group ${targetGroup}`);
+    logger.info(`[RoutingService] Sent action message with buttons to ${branch} branch group ${targetGroup}`);
   }
 
   /**
@@ -110,12 +111,12 @@ class RoutingService {
   async sendToMonitoringGroup(issue) {
     // Check if central monitoring is enabled
     if (!this.enableCentralMonitoring) {
-      console.log('[RoutingService] Central monitoring disabled, skipping');
+      logger.info('[RoutingService] Central monitoring disabled, skipping');
       return;
     }
 
     if (!this.centralMonitoringGroup) {
-      console.log('[RoutingService] Central monitoring enabled but group not configured');
+      logger.info('[RoutingService] Central monitoring enabled but group not configured');
       return;
     }
 
@@ -123,7 +124,7 @@ class RoutingService {
     const message = this.formatMonitoringMessage(issue);
     await messagingAdapter.sendGroupMessage(this.centralMonitoringGroup, message);
 
-    console.log(`[RoutingService] Sent monitoring copy to ${this.centralMonitoringGroup}`);
+    logger.info(`[RoutingService] Sent monitoring copy to ${this.centralMonitoringGroup}`);
   }
 
   /**
@@ -217,17 +218,18 @@ Created: ${new Date(issue.createdAt).toLocaleString()}
    * @param {string} branch - Branch name (JHQ/TRK/GS/IPIL)
    * @returns {object} - Stats object {total, open, resolved}
    */
-  getBranchStatsToday(branch) {
+  async getBranchStatsToday(branch) {
     try {
       const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
 
       // Get all issues for this BRANCH today
-      const allIssues = issueManager.getAllIssues({});
+      const allIssues = await issueManager.getAllIssues({});
 
       // Filter by branch and today's date
       const todayIssues = allIssues.filter(issue => {
-        const issueDate = issue.created_at.split(' ')[0];
-        // Note: Database may not have branch field yet - handle gracefully
+        const issueDate = issue.created_at instanceof Date
+          ? issue.created_at.toISOString().split('T')[0]
+          : issue.created_at.split(' ')[0];
         const issueBranch = issue.branch || null;
         return issueDate === today && issueBranch === branch;
       });
@@ -243,7 +245,7 @@ Created: ${new Date(issue.createdAt).toLocaleString()}
 
       return { total, open, resolved };
     } catch (error) {
-      console.error('[RoutingService] Error calculating branch stats:', error);
+      logger.error('[RoutingService] Error calculating branch stats:', error);
       return { total: 0, open: 0, resolved: 0 };
     }
   }
@@ -283,9 +285,9 @@ Created: ${new Date(issue.createdAt).toLocaleString()}
       
       // For resolved/closed status, send detailed branch metrics
       if (newStatus === 'resolved' || newStatus === 'resolved-with-issues' || newStatus === 'closed' || newStatus === 'confirmed') {
-        const branchStats = this.getBranchStatsToday(issue.branch);
-        const yesterdayStats = this.getBranchStatsYesterday(issue.branch);
-        const avgResponseTime = this.getAverageResponseTime(issue.branch);
+        const branchStats = await this.getBranchStatsToday(issue.branch);
+        const yesterdayStats = await this.getBranchStatsYesterday(issue.branch);
+        const avgResponseTime = await this.getAverageResponseTime(issue.branch);
         
         const statusEmoji = newStatus === 'confirmed' ? '✅' : newStatus.startsWith('cancelled') ? '❌' : '✅';
         const statusAction = newStatus === 'confirmed' ? 'CONFIRMED & CLOSED' : 'RESOLVED';
@@ -359,7 +361,7 @@ Updated by: ${updatedBy}\n⏰ ${new Date().toLocaleString()}`;
     const targetGroup = this.branchGroups[branch] || this.fallbackGroupId;
 
     if (!targetGroup) {
-      console.log(`[RoutingService] No branch group for ${branch}, cannot notify closure`);
+      logger.info(`[RoutingService] No branch group for ${branch}, cannot notify closure`);
       return;
     }
 
@@ -401,7 +403,7 @@ Category: ${issue.category}
     message += `\n\n⏰ ${new Date().toLocaleString()}`;
 
     await messagingAdapter.sendGroupMessage(targetGroup, message);
-    console.log(`[RoutingService] Notified ${branch} branch group of ticket closure: ${issue.issue_id}`);
+    logger.info(`[RoutingService] Notified ${branch} branch group of ticket closure: ${issue.issue_id}`);
   }
 
   /**
@@ -481,15 +483,17 @@ Department: ${issue.department}
    * @param {string} branch - Branch name
    * @returns {object} - Yesterday's stats
    */
-  getBranchStatsYesterday(branch) {
+  async getBranchStatsYesterday(branch) {
     try {
       const yesterday = new Date();
       yesterday.setDate(yesterday.getDate() - 1);
       const yesterdayStr = yesterday.toISOString().split('T')[0];
 
-      const allIssues = issueManager.getAllIssues({});
+      const allIssues = await issueManager.getAllIssues({});
       const yesterdayIssues = allIssues.filter(issue => {
-        const issueDate = issue.created_at.split(' ')[0];
+        const issueDate = issue.created_at instanceof Date
+          ? issue.created_at.toISOString().split('T')[0]
+          : issue.created_at.split(' ')[0];
         const issueBranch = issue.branch || null;
         return issueDate === yesterdayStr && issueBranch === branch;
       });
@@ -504,7 +508,7 @@ Department: ${issue.department}
 
       return { total, open, resolved };
     } catch (error) {
-      console.error('[RoutingService] Error calculating yesterday stats:', error);
+      logger.error('[RoutingService] Error calculating yesterday stats:', error);
       return { total: 0, open: 0, resolved: 0 };
     }
   }
@@ -515,13 +519,15 @@ Department: ${issue.department}
    * @param {string} branch - Branch name
    * @returns {string} - Formatted average time
    */
-  getAverageResponseTime(branch) {
+  async getAverageResponseTime(branch) {
     try {
       const today = new Date().toISOString().split('T')[0];
-      const allIssues = issueManager.getAllIssues({});
+      const allIssues = await issueManager.getAllIssues({});
       
       const todayIssues = allIssues.filter(issue => {
-        const issueDate = issue.created_at.split(' ')[0];
+        const issueDate = issue.created_at instanceof Date
+          ? issue.created_at.toISOString().split('T')[0]
+          : issue.created_at.split(' ')[0];
         const issueBranch = issue.branch || null;
         return issueDate === today && issueBranch === branch && issue.status !== 'pending';
       });
@@ -534,8 +540,8 @@ Department: ${issue.department}
       let totalMinutes = 0;
       let count = 0;
 
-      todayIssues.forEach(issue => {
-        const history = issueManager.getStatusHistory(issue.issue_id);
+      for (const issue of todayIssues) {
+        const history = await issueManager.getStatusHistory(issue.issue_id);
         if (history && history.length > 0) {
           // First status change
           const firstChange = history[0];
@@ -549,7 +555,7 @@ Department: ${issue.department}
             count++;
           }
         }
-      });
+      }
 
       if (count === 0) {
         return 'N/A';
@@ -565,7 +571,7 @@ Department: ${issue.department}
         return `${hours}h ${mins}m`;
       }
     } catch (error) {
-      console.error('[RoutingService] Error calculating avg response time:', error);
+      logger.error('[RoutingService] Error calculating avg response time:', error);
       return 'N/A';
     }
   }

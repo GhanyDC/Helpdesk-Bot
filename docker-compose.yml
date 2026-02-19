@@ -1,0 +1,54 @@
+services:
+  # ---- PostgreSQL 15 ----
+  db:
+    image: postgres:15-alpine
+    restart: always
+    env_file:
+      - .env.production
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U helpdesk -d helpdesk"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---- Help-Desk Bot ----
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env.production
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      NODE_ENV: production
+    networks:
+      - internal
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  pgdata:
+    driver: local

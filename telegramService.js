@@ -5,6 +5,7 @@
  */
 
 const TelegramBot = require('node-telegram-bot-api');
+const logger = require('./logger');
 const config = require('./config');
 
 class TelegramService {
@@ -22,9 +23,9 @@ class TelegramService {
         polling: false, // We'll use webhooks
       });
 
-      console.log('[TelegramService] Bot initialized successfully');
+      logger.info('[TelegramService] Bot initialized successfully');
     } catch (error) {
-      console.error('[TelegramService] Bot initialization error:', error);
+      logger.error('[TelegramService] Bot initialization error:', error);
       throw error;
     }
   }
@@ -45,9 +46,9 @@ class TelegramService {
   async sendMessage(chatId, text) {
     try {
       await this.bot.sendMessage(chatId, text);
-      console.log(`[TelegramService] Sent message to ${chatId}`);
+      logger.info(`[TelegramService] Sent message to ${chatId}`);
     } catch (error) {
-      console.error('[TelegramService] Error sending message:', error);
+      logger.error('[TelegramService] Error sending message:', error);
     }
   }
 
@@ -86,9 +87,9 @@ class TelegramService {
       };
 
       await this.bot.sendMessage(chatId, text, options);
-      console.log(`[TelegramService] Sent keyboard to ${chatId}`);
+      logger.info(`[TelegramService] Sent keyboard to ${chatId}`);
     } catch (error) {
-      console.error('[TelegramService] Error sending keyboard:', error);
+      logger.error('[TelegramService] Error sending keyboard:', error);
     }
   }
 
@@ -100,9 +101,9 @@ class TelegramService {
   async sendGroupMessage(chatId, text) {
     try {
       await this.bot.sendMessage(chatId, text);
-      console.log(`[TelegramService] Sent message to group ${chatId}`);
+      logger.info(`[TelegramService] Sent message to group ${chatId}`);
     } catch (error) {
-      console.error('[TelegramService] Error sending group message:', error);
+      logger.error('[TelegramService] Error sending group message:', error);
     }
   }
 
@@ -116,7 +117,7 @@ class TelegramService {
     if (config.support.groupId) {
       await this.sendGroupMessage(config.support.groupId, message);
     } else {
-      console.warn('[TelegramService] Support group ID not configured');
+      logger.warn('[TelegramService] Support group ID not configured');
     }
   }
 
@@ -274,10 +275,10 @@ ${this.getStatusMessage(newStatus)}
         }
       };
       const sentMessage = await this.bot.sendMessage(chatId, text, options);
-      console.log(`[TelegramService] Sent inline keyboard to ${chatId}`);
+      logger.info(`[TelegramService] Sent inline keyboard to ${chatId}`);
       return sentMessage;
     } catch (error) {
-      console.error('[TelegramService] Error sending inline keyboard:', error);
+      logger.error('[TelegramService] Error sending inline keyboard:', error);
     }
   }
 
@@ -291,7 +292,7 @@ ${this.getStatusMessage(newStatus)}
     try {
       await this.bot.answerCallbackQuery(callbackQueryId, { text, show_alert: showAlert });
     } catch (error) {
-      console.error('[TelegramService] Error answering callback query:', error);
+      logger.error('[TelegramService] Error answering callback query:', error);
     }
   }
 
@@ -315,9 +316,9 @@ ${this.getStatusMessage(newStatus)}
         options.reply_markup = { inline_keyboard: [] };
       }
       await this.bot.editMessageText(text, options);
-      console.log(`[TelegramService] Edited message ${messageId} in ${chatId}`);
+      logger.info(`[TelegramService] Edited message ${messageId} in ${chatId}`);
     } catch (error) {
-      console.error('[TelegramService] Error editing message:', error);
+      logger.error('[TelegramService] Error editing message:', error);
     }
   }
 
@@ -329,9 +330,9 @@ ${this.getStatusMessage(newStatus)}
   async deleteMessage(chatId, messageId) {
     try {
       await this.bot.deleteMessage(chatId, messageId);
-      console.log(`[TelegramService] Deleted message ${messageId} in ${chatId}`);
+      logger.info(`[TelegramService] Deleted message ${messageId} in ${chatId}`);
     } catch (error) {
-      console.error('[TelegramService] Error deleting message:', error);
+      logger.error('[TelegramService] Error deleting message:', error);
     }
   }
 
@@ -344,9 +345,9 @@ ${this.getStatusMessage(newStatus)}
   async setChatPermissions(chatId, permissions) {
     try {
       await this.bot.setChatPermissions(chatId, permissions);
-      console.log(`[TelegramService] Set chat permissions for ${chatId}`);
+      logger.info(`[TelegramService] Set chat permissions for ${chatId}`);
     } catch (error) {
-      console.error('[TelegramService] Error setting chat permissions:', error);
+      logger.error('[TelegramService] Error setting chat permissions:', error);
     }
   }
 }

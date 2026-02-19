@@ -32,11 +32,12 @@
 
 // Import the platform service (Telegram for now, Viber in future)
 const platformService = require('./telegramService');
+const logger = require('./logger');
 
 class MessagingAdapter {
   constructor() {
     this.platformService = platformService;
-    console.log('[MessagingAdapter] Initialized with Telegram platform');
+    logger.info('[MessagingAdapter] Initialized with Telegram platform');
   }
 
   /**

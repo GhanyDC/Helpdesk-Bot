@@ -5,6 +5,7 @@
  */
 
 const config = require('./config');
+const logger = require('./logger');
 
 class PermissionsManager {
   constructor() {
@@ -78,7 +79,7 @@ class PermissionsManager {
    */
   addSupportStaff(userId) {
     this.supportStaffIds.add(userId);
-    console.log(`[PermissionsManager] Added support staff: ${userId}`);
+    logger.info(`[PermissionsManager] Added support staff: ${userId}`);
   }
 
   /**
@@ -87,7 +88,7 @@ class PermissionsManager {
    */
   removeSupportStaff(userId) {
     this.supportStaffIds.delete(userId);
-    console.log(`[PermissionsManager] Removed support staff: ${userId}`);
+    logger.info(`[PermissionsManager] Removed support staff: ${userId}`);
   }
 
   /**
@@ -97,7 +98,7 @@ class PermissionsManager {
   addEmployee(userId) {
     this.employeeIds.add(userId);
     this.allowAllEmployees = false; // Disable allow-all when specific employees are added
-    console.log(`[PermissionsManager] Added employee: ${userId}`);
+    logger.info(`[PermissionsManager] Added employee: ${userId}`);
   }
 
   /**
@@ -106,7 +107,7 @@ class PermissionsManager {
    */
   removeEmployee(userId) {
     this.employeeIds.delete(userId);
-    console.log(`[PermissionsManager] Removed employee: ${userId}`);
+    logger.info(`[PermissionsManager] Removed employee: ${userId}`);
   }
 
   /**

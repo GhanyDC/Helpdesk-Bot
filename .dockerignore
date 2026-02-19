@@ -1,0 +1,17 @@
+node_modules
+npm-debug.log*
+.env*
+*.bak
+*.md
+test/
+.git
+.gitignore
+docker-compose.yml
+Dockerfile
+Procfile
+deploy-*.md
+deploy-*.ps1
+data/*.db
+data/*.sqlitelogs/
+backups/
+_write_files*.js

@@ -1,85 +1,70 @@
 /**
- * Telegram Helpdesk Bot - Main Server
- * 
- * This is the entry point for the Telegram Helpdesk Bot.
- * It sets up the Express webhook server and handles incoming Telegram updates.
- * 
- * Features:
- * - Receives messages from employees
- * - Manages step-by-step issue creation flow
- * - Handles support staff status update commands
- * - Logs all issues to SQLite database
- * - Sends notifications to central support group
- * - Auto-generates unique Issue IDs
- * 
- * Author: Your Company
- * Date: January 2026
+ * Telegram Helpdesk Bot — Main Server
+ *
+ * Hardened for on-prem production:
+ *  - /health endpoint
+ *  - Secret webhook path
+ *  - Graceful shutdown (SIGTERM, SIGINT)
+ *  - Structured logging (winston)
+ *  - Env validation at startup (handled by config.js)
+ *  - Unhandled rejection / uncaught exception guards
  */
 
 const express = require('express');
 const bodyParser = require('body-parser');
 
-// Import modules
+const logger = require('./logger');
+const db = require('./db');
 const config = require('./config');
 const telegramService = require('./telegramService');
 const messageHandler = require('./messageHandler');
 const conversationManager = require('./conversationManager');
-const issueManager = require('./issueManager');
 const schedulerService = require('./schedulerService');
 const userIdLogger = require('./userIdLogger');
 
-// Validate configuration
-if (!config.telegram.authToken) {
-  console.error('❌ TELEGRAM_BOT_TOKEN is not set in .env file');
-  process.exit(1);
-}
-
-if (!config.server.webhookUrl) {
-  console.error('❌ WEBHOOK_URL is not set in .env file');
-  console.error('ℹ️  You need to set up ngrok and configure the webhook URL');
-  process.exit(1);
-}
-
-// Initialize Express app
 const app = express();
 const port = config.server.port;
 
-// Middleware
+// ── Middleware ──────────────────────────────────────────────────────
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// Get bot instance
-const bot = telegramService.getBot();
-
-// Health check endpoint
-app.get('/', (req, res) => {
-  res.send({
-    status: 'OK',
-    bot: config.telegram.botName,
-    timestamp: new Date().toISOString(),
-  });
+// ── Health endpoint ────────────────────────────────────────────────
+app.get('/health', async (req, res) => {
+  try {
+    await db.query('SELECT 1');
+    res.json({ status: 'ok', uptime: process.uptime(), timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(503).json({ status: 'error', error: err.message });
+  }
 });
 
-// Telegram webhook endpoint
-app.post('/telegram/webhook', async (req, res) => {
+// Legacy root health (Docker HEALTHCHECK)
+app.get('/', (req, res) => {
+  res.json({ status: 'ok', bot: config.telegram.botName, timestamp: new Date().toISOString() });
+});
+
+// ── Secret webhook endpoint ────────────────────────────────────────
+const webhookPath = `/telegram/webhook/${config.server.webhookSecret}`;
+
+app.post(webhookPath, async (req, res) => {
   try {
     const update = req.body;
-    
-    // Handle different types of updates
+    logger.debug('Webhook update received', { updateId: update.update_id });
+
     if (update.message) {
       await handleMessage(update.message);
     } else if (update.callback_query) {
       await handleCallbackQuery(update.callback_query);
     }
-    
     res.sendStatus(200);
   } catch (error) {
-    console.error('[Bot] Error processing update:', error);
-    res.sendStatus(500);
+    logger.error('Error processing webhook update', { error: error.message, stack: error.stack });
+    res.sendStatus(200); // always 200 so Telegram doesn't retry
   }
 });
 
-// Handle callback queries (inline button presses)
+// ── Callback query handler ─────────────────────────────────────────
 async function handleCallbackQuery(callbackQuery) {
   const userId = callbackQuery.from.id.toString();
   const userName = callbackQuery.from.first_name || 'User';
@@ -87,10 +72,9 @@ async function handleCallbackQuery(callbackQuery) {
   const messageId = callbackQuery.message.message_id;
   const data = callbackQuery.data;
 
-  console.log(`[Bot] Callback query from ${userName} (${userId}): ${data}`);
+  logger.info('Callback query', { userId, userName, data });
 
-  // Log user interaction for ID discovery
-  userIdLogger.logUser({
+  await userIdLogger.logUser({
     id: callbackQuery.from.id,
     username: callbackQuery.from.username,
     first_name: callbackQuery.from.first_name,
@@ -101,42 +85,33 @@ async function handleCallbackQuery(callbackQuery) {
   try {
     await messageHandler.handleCallbackQuery({
       callbackQueryId: callbackQuery.id,
-      userId,
-      userName,
-      chatId,
-      messageId,
-      data,
+      userId, userName, chatId, messageId, data,
       message: callbackQuery.message,
     });
   } catch (error) {
-    console.error('[Bot] Error handling callback query:', error);
+    logger.error('Callback query error', { userId, error: error.message, stack: error.stack });
     await telegramService.answerCallbackQuery(callbackQuery.id, '❌ An error occurred');
   }
 }
 
-// Handle incoming messages
+// ── Message handler ────────────────────────────────────────────────
 async function handleMessage(message) {
   const chatId = message.chat.id;
   const userId = message.from.id.toString();
   const userName = message.from.first_name || 'User';
-  const chatType = message.chat.type; // 'private', 'group', 'supergroup', or 'channel'
+  const chatType = message.chat.type;
   const isGroupChat = chatType === 'group' || chatType === 'supergroup';
-  
-  // Log user interaction for ID discovery
-  // This helps admins get user IDs for SUPPORT_STAFF_IDS configuration
-  userIdLogger.logUser({
+
+  await userIdLogger.logUser({
     id: message.from.id,
     username: message.from.username,
     first_name: message.from.first_name,
     last_name: message.from.last_name,
     chat_id: chatId,
   });
-  
-  // Handle different message types
+
   if (message.text) {
-    // Check for /start command
     if (message.text === '/start') {
-      // Only respond to /start in private chats
       if (!isGroupChat) {
         await telegramService.sendMessage(
           chatId,
@@ -145,107 +120,93 @@ async function handleMessage(message) {
       }
       return;
     }
-    
-    // Create user profile object similar to Viber format
-    const userProfile = {
-      id: userId,
-      name: userName,
-      chatId: chatId,
-      isGroup: isGroupChat,
-    };
-    
+
+    const userProfile = { id: userId, name: userName, chatId, isGroup: isGroupChat };
+
     try {
       await messageHandler.handleMessage(message, userProfile);
     } catch (error) {
-      console.error('[Bot] Error handling message:', error);
-      await telegramService.sendMessage(
-        chatId,
-        '❌ An error occurred while processing your message. Please try again.'
-      );
+      logger.error('Message handler error', { userId, error: error.message, stack: error.stack });
+      await telegramService.sendMessage(chatId, '❌ An error occurred while processing your message. Please try again.');
     }
   } else {
-    // Handle non-text messages (images, stickers, etc.)
     if (!isGroupChat) {
-      await telegramService.sendMessage(
-        chatId,
-        'ℹ️ Please send text messages only.\nImages and other media are not supported.'
-      );
+      await telegramService.sendMessage(chatId, 'ℹ️ Please send text messages only.\nImages and other media are not supported.');
     }
   }
 }
 
-// Set webhook
-const webhookUrl = `${config.server.webhookUrl}/telegram/webhook`;
-bot.setWebHook(webhookUrl)
-  .then(() => {
-    console.log('✅ Webhook set successfully');
-    console.log(`📍 Webhook URL: ${webhookUrl}`);
-  })
-  .catch(error => {
-    console.error('❌ Error setting webhook:', error);
-  });
+// ── Boot sequence ──────────────────────────────────────────────────
+let server;
 
-// Lock down central monitoring group (only bot can send)
-if (config.support.enableCentralMonitoring && config.support.centralMonitoringGroup) {
-  telegramService.setChatPermissions(config.support.centralMonitoringGroup, {
-    can_send_messages: false,
-    can_send_media_messages: false,
-    can_send_polls: false,
-    can_send_other_messages: false,
-    can_add_web_page_previews: false,
-    can_change_info: false,
-    can_invite_users: false,
-    can_pin_messages: false,
-  }).then(() => {
-    console.log('🔒 Central monitoring group locked (bot-only posting)');
-  }).catch(err => {
-    console.warn('⚠️ Could not lock monitoring group (bot may not be admin):', err.message);
+async function boot() {
+  // 1. Database
+  await db.initialize();
+  logger.info('Database ready (PostgreSQL pool)');
+
+  // 2. Seed admin/support roles from env into users table
+  await userIdLogger.seedRolesFromEnv();
+
+  // 3. Telegram webhook (secret path)
+  const bot = telegramService.getBot();
+  const fullWebhookUrl = `${config.server.webhookUrl}${webhookPath}`;
+  try {
+    await bot.setWebHook(fullWebhookUrl);
+    logger.info('Webhook set', { url: fullWebhookUrl });
+  } catch (error) {
+    logger.error('Webhook setup error', { error: error.message });
+  }
+
+  // 4. Lock central monitoring group
+  if (config.support.enableCentralMonitoring && config.support.centralMonitoringGroup) {
+    try {
+      await telegramService.setChatPermissions(config.support.centralMonitoringGroup, {
+        can_send_messages: false, can_send_media_messages: false,
+        can_send_polls: false, can_send_other_messages: false,
+        can_add_web_page_previews: false, can_change_info: false,
+        can_invite_users: false, can_pin_messages: false,
+      });
+      logger.info('Central monitoring group locked');
+    } catch (err) {
+      logger.warn('Could not lock monitoring group', { error: err.message });
+    }
+  }
+
+  // 5. Session cleanup every 5 min
+  setInterval(() => conversationManager.cleanupExpiredConversations(), 5 * 60 * 1000);
+
+  // 6. Scheduler
+  schedulerService.start();
+
+  // 7. Start Express
+  server = app.listen(port, () => {
+    logger.info('Server started', { port, webhook: fullWebhookUrl, bot: config.telegram.botName });
   });
 }
 
-// Cleanup routine - remove expired conversations every 5 minutes
-setInterval(() => {
-  conversationManager.cleanupExpiredConversations();
-}, 5 * 60 * 1000);
-
-// Start scheduler for daily reports
-schedulerService.start();
-
-// Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\n[Server] Shutting down gracefully...');
-  
-  // Stop scheduler
+// ── Graceful shutdown ──────────────────────────────────────────────
+async function shutdown(signal) {
+  logger.info(`Received ${signal}, shutting down...`);
   schedulerService.stop();
-  
-  // Close database connections
-  issueManager.close();
-  userIdLogger.close();
-  
-  console.log('[Server] Cleanup completed. Goodbye!');
+  if (server) server.close();
+  await db.close();
+  logger.info('Shutdown complete');
   process.exit(0);
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled rejection', { error: String(reason) });
+});
+process.on('uncaughtException', (err) => {
+  logger.error('Uncaught exception', { error: err.message, stack: err.stack });
+  process.exit(1);
 });
 
-process.on('SIGTERM', () => {
-  console.log('\n[Server] Received SIGTERM, shutting down...');
-  schedulerService.stop();
-  issueManager.close();
-  userIdLogger.close();
-  process.exit(0);
+boot().catch((err) => {
+  logger.error('Fatal startup error', { error: err.message, stack: err.stack });
+  process.exit(1);
 });
 
-// Start server
-app.listen(port, () => {
-  console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log('🤖 Telegram Helpdesk Bot Server');
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log(`✅ Server running on port ${port}`);
-  console.log(`📍 Webhook: ${config.server.webhookUrl}/telegram/webhook`);
-  console.log(`🤖 Bot Name: ${config.telegram.botName}`);
-  console.log(`💾 Database: ${config.database.path}`);
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-  console.log('ℹ️  Waiting for messages...\n');
-});
-
-// Export for testing
 module.exports = app;

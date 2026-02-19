@@ -1,164 +1,145 @@
 /**
- * Conversation Manager
- * Manages conversation state for each user
- * Tracks which step each user is on and stores their responses
+ * Conversation Manager — DB-Persisted Sessions
+ *
+ * Stores wizard state in the PostgreSQL sessions table.
+ * Survives container restarts and redeploys.
+ *
+ * API is async — all callers must await.
  */
 
+const db = require('./db');
+const logger = require('./logger');
 const { CONVERSATION_STEPS } = require('./constants');
 
-class ConversationManager {
-  constructor() {
-    // In-memory storage for active conversations
-    // Key: userId (Viber ID), Value: conversation state object
-    this.activeConversations = new Map();
-    
-    // Session timeout (30 minutes of inactivity)
-    this.sessionTimeout = 30 * 60 * 1000;
-  }
+const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
+class ConversationManager {
   /**
-   * Start a new conversation for a user
-   * 
-   * CORRECTED: Starts with BRANCH step (routing key), not department
-   * 
-   * @param {string} userId - Viber user ID
-   * @param {object} userInfo - User information (name, avatar, etc.)
+   * Start a new conversation for a user.
+   * Overwrites any existing session.
    */
-  startConversation(userId, userInfo = {}) {
+  async startConversation(userId, userInfo = {}) {
     const conversation = {
       userId,
       userName: userInfo.name || 'Unknown User',
-      currentStep: CONVERSATION_STEPS.BRANCH,  // CORRECTED: Start with branch
+      currentStep: CONVERSATION_STEPS.BRANCH,
       data: {},
-      startTime: new Date(),
-      lastActivity: new Date(),
+      startTime: new Date().toISOString(),
+      lastActivity: new Date().toISOString(),
     };
 
-    this.activeConversations.set(userId, conversation);
-    console.log(`[ConversationManager] Started conversation for user: ${userId}`);
+    await db.query(
+      `INSERT INTO sessions (telegram_id, state, data, updated_at)
+       VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+       ON CONFLICT (telegram_id) DO UPDATE
+         SET state = $2, data = $3, updated_at = CURRENT_TIMESTAMP`,
+      [userId, conversation.currentStep, JSON.stringify(conversation)]
+    );
+
+    logger.info('Session started', { userId });
     return conversation;
   }
 
   /**
-   * Get active conversation for a user
-   * @param {string} userId - Viber user ID
-   * @returns {object|null} - Conversation object or null if not found
+   * Retrieve active conversation. Returns null if expired or absent.
    */
-  getConversation(userId) {
-    const conversation = this.activeConversations.get(userId);
-    
-    if (!conversation) {
+  async getConversation(userId) {
+    const result = await db.query(
+      'SELECT state, data, updated_at FROM sessions WHERE telegram_id = $1',
+      [userId]
+    );
+
+    if (result.rows.length === 0) return null;
+
+    const row = result.rows[0];
+    const conversation = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
+
+    // Check timeout
+    const lastActivity = new Date(conversation.lastActivity || row.updated_at);
+    if (Date.now() - lastActivity.getTime() > SESSION_TIMEOUT_MS) {
+      logger.info('Session expired', { userId });
+      await this.endConversation(userId);
       return null;
     }
 
-    // Check if conversation has timed out
-    const now = new Date();
-    const timeSinceLastActivity = now - conversation.lastActivity;
-    
-    if (timeSinceLastActivity > this.sessionTimeout) {
-      console.log(`[ConversationManager] Conversation timeout for user: ${userId}`);
-      this.endConversation(userId);
-      return null;
-    }
+    // Touch lastActivity
+    conversation.lastActivity = new Date().toISOString();
+    await db.query(
+      'UPDATE sessions SET data = $1, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $2',
+      [JSON.stringify(conversation), userId]
+    );
 
-    // Update last activity time
-    conversation.lastActivity = now;
     return conversation;
   }
 
   /**
-   * Update conversation data and move to next step
-   * @param {string} userId - Viber user ID
-   * @param {string} field - Field name to store
-   * @param {any} value - Value to store
-   * @param {string} nextStep - Next conversation step
+   * Update a field and advance to the next step.
    */
-  updateConversation(userId, field, value, nextStep) {
-    const conversation = this.getConversation(userId);
-    
+  async updateConversation(userId, field, value, nextStep) {
+    const conversation = await this.getConversation(userId);
     if (!conversation) {
-      console.error(`[ConversationManager] No active conversation for user: ${userId}`);
+      logger.warn('updateConversation: no active session', { userId });
       return null;
     }
 
-    // Store the field value
     conversation.data[field] = value;
-    
-    // Move to next step
     conversation.currentStep = nextStep;
-    conversation.lastActivity = new Date();
+    conversation.lastActivity = new Date().toISOString();
 
-    console.log(`[ConversationManager] Updated ${field} for ${userId}, moving to ${nextStep}`);
+    await db.query(
+      'UPDATE sessions SET state = $1, data = $2, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $3',
+      [nextStep, JSON.stringify(conversation), userId]
+    );
+
+    logger.debug('Session updated', { userId, field, nextStep });
     return conversation;
   }
 
   /**
-   * End a conversation and remove from active list
-   * @param {string} userId - Viber user ID
+   * End (delete) a conversation and return collected data.
    */
-  endConversation(userId) {
-    const conversation = this.activeConversations.get(userId);
-    
-    if (conversation) {
-      console.log(`[ConversationManager] Ending conversation for user: ${userId}`);
-      this.activeConversations.delete(userId);
-      return conversation.data;
-    }
-    
-    return null;
+  async endConversation(userId) {
+    const result = await db.query(
+      'DELETE FROM sessions WHERE telegram_id = $1 RETURNING data',
+      [userId]
+    );
+
+    if (result.rows.length === 0) return null;
+
+    const conversation = typeof result.rows[0].data === 'string'
+      ? JSON.parse(result.rows[0].data)
+      : result.rows[0].data;
+
+    logger.info('Session ended', { userId });
+    return conversation.data || conversation;
+  }
+
+  async hasActiveConversation(userId) {
+    const c = await this.getConversation(userId);
+    return c !== null;
+  }
+
+  async getCurrentStep(userId) {
+    const c = await this.getConversation(userId);
+    return c ? c.currentStep : null;
+  }
+
+  async getConversationData(userId) {
+    const c = await this.getConversation(userId);
+    return c ? c.data : null;
   }
 
   /**
-   * Check if user has an active conversation
-   * @param {string} userId - Viber user ID
-   * @returns {boolean}
+   * Purge expired sessions (SQL-based — no in-memory scan).
    */
-  hasActiveConversation(userId) {
-    const conversation = this.getConversation(userId);
-    return conversation !== null;
-  }
-
-  /**
-   * Get current step for a user
-   * @param {string} userId - Viber user ID
-   * @returns {string|null}
-   */
-  getCurrentStep(userId) {
-    const conversation = this.getConversation(userId);
-    return conversation ? conversation.currentStep : null;
-  }
-
-  /**
-   * Get conversation data for a user
-   * @param {string} userId - Viber user ID
-   * @returns {object|null}
-   */
-  getConversationData(userId) {
-    const conversation = this.getConversation(userId);
-    return conversation ? conversation.data : null;
-  }
-
-  /**
-   * Clean up expired conversations (run periodically)
-   */
-  cleanupExpiredConversations() {
-    const now = new Date();
-    let cleanedCount = 0;
-
-    for (const [userId, conversation] of this.activeConversations.entries()) {
-      const timeSinceLastActivity = now - conversation.lastActivity;
-      
-      if (timeSinceLastActivity > this.sessionTimeout) {
-        this.activeConversations.delete(userId);
-        cleanedCount++;
-      }
-    }
-
-    if (cleanedCount > 0) {
-      console.log(`[ConversationManager] Cleaned up ${cleanedCount} expired conversations`);
+  async cleanupExpiredConversations() {
+    const result = await db.query(
+      `DELETE FROM sessions WHERE updated_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes'`
+    );
+    if (result.rowCount > 0) {
+      logger.info(`Cleaned up ${result.rowCount} expired sessions`);
     }
   }
 }
 
-// Export singleton instance
 module.exports = new ConversationManager();

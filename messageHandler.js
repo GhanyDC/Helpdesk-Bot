@@ -9,6 +9,7 @@
  */
 
 const conversationManager = require('./conversationManager');
+const logger = require('./logger');
 const issueManager = require('./issueManager');
 const messagingAdapter = require('./messagingAdapter'); // Platform abstraction
 const routingService = require('./routingService');     // Branch routing
@@ -40,7 +41,7 @@ class MessageHandler {
     const messageText = message.text.trim();
     const isGroupChat = userProfile.isGroup || false;
 
-    console.log(`[MessageHandler] Received message from ${userName} (${userId}) in ${isGroupChat ? 'GROUP' : 'PRIVATE'}: ${messageText}`);
+    logger.info(`[MessageHandler] Received message from ${userName} (${userId}) in ${isGroupChat ? 'GROUP' : 'PRIVATE'}: ${messageText}`);
 
     // ── CENTRAL MONITORING: Delete non-bot messages ──
     const config = require('./config');
@@ -73,7 +74,7 @@ class MessageHandler {
         // Prompt for next in queue
         if (queue.length > 0) {
           const next = queue[0];
-          const nextIssue = issueManager.getIssue(next.issueId);
+          const nextIssue = await issueManager.getIssue(next.issueId);
           const description = nextIssue ? nextIssue.description : 'N/A';
           await messagingAdapter.sendMessage(chatId, `📝 REMARKS REQUIRED\n\n📋 Issue: ${next.issueId}\n\n📄 Subject:\n${description}\n\nPlease REPLY to this message with your remarks for this ticket.\n\n⚠️ Important: Use the REPLY function to respond to this message.\n\n💡 Type /cancel_remarks to skip`);
         }
@@ -112,7 +113,7 @@ class MessageHandler {
     }
 
     // Check if user has active conversation
-    const conversation = conversationManager.getConversation(userId);
+    const conversation = await conversationManager.getConversation(userId);
 
     if (!conversation) {
       // Start new conversation
@@ -151,7 +152,7 @@ class MessageHandler {
     const parts = text.trim().split(/\s+/);
     const command = parts[0].toLowerCase();
 
-    console.log(`[MessageHandler] Bot command received: ${command}`);
+    logger.info(`[MessageHandler] Bot command received: ${command}`);
 
     switch (command) {
       case '/stats':
@@ -193,7 +194,7 @@ class MessageHandler {
   async handleStatsCommand(parts, chatId) {
     if (parts.length === 1) {
       // /stats - show overall today's stats
-      const message = statsService.formatTodayStatsMessage();
+      const message = await statsService.formatTodayStatsMessage();
       await messagingAdapter.sendMessage(chatId, message);
     } else {
       const input = parts.slice(1).join(' ');
@@ -204,7 +205,7 @@ class MessageHandler {
       );
 
       if (matchedBranch) {
-        const message = statsService.formatBranchStatsMessage(matchedBranch);
+        const message = await statsService.formatBranchStatsMessage(matchedBranch);
         await messagingAdapter.sendMessage(chatId, message);
         return;
       }
@@ -215,7 +216,7 @@ class MessageHandler {
       );
 
       if (matchedDept) {
-        const message = statsService.formatDepartmentStatsMessage(matchedDept);
+        const message = await statsService.formatDepartmentStatsMessage(matchedDept);
         await messagingAdapter.sendMessage(chatId, message);
       } else {
         await messagingAdapter.sendMessage(
@@ -231,7 +232,7 @@ class MessageHandler {
    * @param {string} chatId - Chat ID
    */
   async handleOpenIssuesCommand(chatId) {
-    const message = statsService.formatOpenIssuesMessage();
+    const message = await statsService.formatOpenIssuesMessage();
     await messagingAdapter.sendMessage(chatId, message);
   }
 
@@ -270,7 +271,7 @@ Send any message directly to this bot in a private chat to start a new ticket.`;
    * @param {string} chatId - Chat ID
    */
   async handleWhoAmICommand(userId, chatId) {
-    const message = userIdLogger.formatUserInfo(userId);
+    const message = await userIdLogger.formatUserInfo(userId);
     await messagingAdapter.sendMessage(chatId, message);
   }
 
@@ -290,7 +291,7 @@ Send any message directly to this bot in a private chat to start a new ticket.`;
       return;
     }
 
-    const message = userIdLogger.formatUserList();
+    const message = await userIdLogger.formatUserList();
     await messagingAdapter.sendMessage(chatId, message);
   }
 
@@ -331,7 +332,7 @@ Send any message directly to this bot in a private chat to start a new ticket.`;
       }
 
       const issueId = issueIdMatch[0];
-      const issue = issueManager.getIssue(issueId);
+      const issue = await issueManager.getIssue(issueId);
 
       if (!issue) {
         await messagingAdapter.sendMessage(chatId, `❌ Issue not found: ${issueId}`);
@@ -387,7 +388,7 @@ Select new status below:`,
         return;
       }
 
-      const issue = issueManager.getIssue(issueId);
+      const issue = await issueManager.getIssue(issueId);
       if (!issue) {
         await messagingAdapter.sendMessage(chatId, `❌ Issue not found: ${issueId}`);
         return;
@@ -418,27 +419,27 @@ Select new status below:`,
           return;
         }
 
-        const success = issueManager.resolveWithRemarks(issueId, statusInput, remarksText, userId, userName);
+        const success = await issueManager.resolveWithRemarks(issueId, statusInput, remarksText, userId, userName);
         if (success) {
           const statusLabel = STATUS_LABELS[statusInput] || statusInput;
           await messagingAdapter.sendMessage(chatId, `✅ Updated ${issueId}\nStatus: ${oldStatus} → ${statusLabel}\n\n📝 Remarks:\n${remarksText}`);
           await routingService.notifyStatusUpdate(issue, oldStatus, statusInput, userName, remarksText);
           await this.sendConfirmationRequest(issue, statusInput, userName, remarksText);
-          console.log(`[MessageHandler] Status updated: ${issueId} ${oldStatus} → ${statusInput} by ${userName}`);
+          logger.info(`[MessageHandler] Status updated: ${issueId} ${oldStatus} → ${statusInput} by ${userName}`);
         } else {
           await messagingAdapter.sendMessage(chatId, '❌ Failed to update issue status.');
         }
         return;
       }
 
-      const success = issueManager.updateIssueStatus(issueId, statusInput, userId, userName);
+      const success = await issueManager.updateIssueStatus(issueId, statusInput, userId, userName);
 
       if (success) {
         const statusLabel = STATUS_LABELS[statusInput] || statusInput;
         await messagingAdapter.sendMessage(chatId, `✅ Updated ${issueId}\nStatus: ${oldStatus} → ${statusLabel}`);
         await routingService.notifyStatusUpdate(issue, oldStatus, statusInput, userName);
 
-        console.log(`[MessageHandler] Status updated: ${issueId} ${oldStatus} → ${statusInput} by ${userName}`);
+        logger.info(`[MessageHandler] Status updated: ${issueId} ${oldStatus} → ${statusInput} by ${userName}`);
       } else {
         await messagingAdapter.sendMessage(chatId, '❌ Failed to update issue status.');
       }
@@ -461,7 +462,7 @@ Select new status below:`,
    */
   async handleCallbackQuery(callbackData) {
     const { callbackQueryId, userId, userName, chatId, messageId, data } = callbackData;
-    console.log(`[MessageHandler] Callback query from ${userName} (${userId}): ${data}`);
+    logger.info(`[MessageHandler] Callback query from ${userName} (${userId}): ${data}`);
 
     const parts = data.split(':');
     const action = parts[0];
@@ -509,7 +510,7 @@ Select new status below:`,
       return;
     }
 
-    const issue = issueManager.getIssue(issueId);
+    const issue = await issueManager.getIssue(issueId);
     if (!issue) {
       await messagingAdapter.answerCallbackQuery(callbackQueryId, '❌ Issue not found');
       return;
@@ -572,7 +573,7 @@ Select new status below:`,
 
     // ── Non-resolve statuses: update immediately ──
     const oldStatus = issue.status;
-    const success = issueManager.updateIssueStatus(issueId, newStatus, userId, userName);
+    const success = await issueManager.updateIssueStatus(issueId, newStatus, userId, userName);
     if (!success) {
       await messagingAdapter.answerCallbackQuery(callbackQueryId, '❌ Failed to update status');
       return;
@@ -591,7 +592,7 @@ Select new status below:`,
     // Notify employee and central monitoring
     await routingService.notifyStatusUpdate(issue, oldStatus, newStatus, userName);
 
-    console.log(`[MessageHandler] Status updated via button: ${issueId} ${oldStatus} → ${newStatus} by ${userName}`);
+    logger.info(`[MessageHandler] Status updated via button: ${issueId} ${oldStatus} → ${newStatus} by ${userName}`);
   }
 
   /**
@@ -608,13 +609,13 @@ Select new status below:`,
     const { issueId, newStatus, messageId, oldStatus, isCancellation } = pending;
 
     // Update with remarks
-    const success = issueManager.resolveWithRemarks(issueId, newStatus, remarks, userId, userName);
+    const success = await issueManager.resolveWithRemarks(issueId, newStatus, remarks, userId, userName);
     if (!success) {
       await messagingAdapter.sendMessage(chatId, '❌ Failed to update issue status.');
       return;
     }
 
-    const issue = issueManager.getIssue(issueId);
+    const issue = await issueManager.getIssue(issueId);
     const statusLabel = STATUS_LABELS[newStatus] || newStatus;
 
     // Confirm in group
@@ -654,12 +655,12 @@ To create a new ticket, send any message.`
       await this.sendConfirmationRequest(issue, newStatus, userName, remarks);
     }
 
-    console.log(`[MessageHandler] ${isCancellation ? 'Cancelled' : 'Resolved'} ${issueId} with remarks by ${userName}`);
+    logger.info(`[MessageHandler] ${isCancellation ? 'Cancelled' : 'Resolved'} ${issueId} with remarks by ${userName}`);
 
     // Prompt for next queued ticket if any remain
     if (queue.length > 0) {
       const next = queue[0];
-      const nextIssue = issueManager.getIssue(next.issueId);
+      const nextIssue = await issueManager.getIssue(next.issueId);
       const description = nextIssue ? nextIssue.description : 'N/A';
       await messagingAdapter.sendMessage(chatId, `📝 REMARKS REQUIRED\n\n📋 Issue: ${next.issueId}\n\n📄 Subject:\n${description}\n\nPlease REPLY to this message with your remarks for this ticket.\n\n⚠️ Important: Use the REPLY function to respond to this message.\n\n💡 Type /cancel_remarks to skip`);
     }
@@ -676,10 +677,10 @@ To create a new ticket, send any message.`
       const filtered = queue.filter(entry => now - entry.timestamp <= maxAge);
       if (filtered.length === 0) {
         this.pendingRemarks.delete(key);
-        console.log(`[MessageHandler] Cleaned up all stale pending remarks for ${key}`);
+        logger.info(`[MessageHandler] Cleaned up all stale pending remarks for ${key}`);
       } else if (filtered.length < queue.length) {
         this.pendingRemarks.set(key, filtered);
-        console.log(`[MessageHandler] Cleaned up ${queue.length - filtered.length} stale remarks for ${key}`);
+        logger.info(`[MessageHandler] Cleaned up ${queue.length - filtered.length} stale remarks for ${key}`);
       }
     }
   }
@@ -696,7 +697,7 @@ To create a new ticket, send any message.`
     const issueId = parts[1];
     const action = parts[2]; // 'yes' or 'no'
 
-    const issue = issueManager.getIssue(issueId);
+    const issue = await issueManager.getIssue(issueId);
     if (!issue) {
       await messagingAdapter.answerCallbackQuery(callbackQueryId, '❌ Issue not found');
       return;
@@ -716,7 +717,7 @@ To create a new ticket, send any message.`
     if (action === 'yes') {
       // Employee confirms resolution
       const oldStatus = issue.status;
-      const success = issueManager.updateIssueStatus(issueId, ISSUE_STATUS.CONFIRMED, userId, userName);
+      const success = await issueManager.updateIssueStatus(issueId, ISSUE_STATUS.CONFIRMED, userId, userName);
       if (success) {
         await messagingAdapter.answerCallbackQuery(callbackQueryId, '✅ Confirmed!');
 
@@ -729,7 +730,7 @@ To create a new ticket, send any message.`
     } else if (action === 'no') {
       // Employee says NOT resolved → reopen ticket
       const oldStatus = issue.status;
-      const success = issueManager.updateIssueStatus(issueId, ISSUE_STATUS.IN_PROCESS, userId, userName);
+      const success = await issueManager.updateIssueStatus(issueId, ISSUE_STATUS.IN_PROCESS, userId, userName);
       if (success) {
         await messagingAdapter.answerCallbackQuery(callbackQueryId, '📋 Ticket reopened');
 
@@ -752,7 +753,7 @@ To create a new ticket, send any message.`
     }
 
     const issueId = parts[1];
-    const issue = issueManager.getIssue(issueId);
+    const issue = await issueManager.getIssue(issueId);
 
     if (!issue) {
       await messagingAdapter.answerCallbackQuery(callbackQueryId, '❌ Issue not found');
@@ -771,7 +772,7 @@ To create a new ticket, send any message.`
     }
 
     const oldStatus = issue.status;
-    const success = issueManager.updateIssueStatus(issueId, ISSUE_STATUS.CANCELLED_USER, userId, userName);
+    const success = await issueManager.updateIssueStatus(issueId, ISSUE_STATUS.CANCELLED_USER, userId, userName);
 
     if (success) {
       await messagingAdapter.answerCallbackQuery(callbackQueryId, '✅ Ticket cancelled');
@@ -893,7 +894,7 @@ ${issue.description}
    * @param {object} userProfile - User profile
    */
   async startNewIssue(userId, chatId, userProfile) {
-    conversationManager.startConversation(userId, userProfile);
+    await conversationManager.startConversation(userId, userProfile);
     
     await messagingAdapter.sendKeyboard(
       chatId,
@@ -954,7 +955,7 @@ ${issue.description}
 
       default:
         await messagingAdapter.sendMessage(chatId, '❌ Unknown step. Let\'s start over.');
-        conversationManager.endConversation(userId);
+        await conversationManager.endConversation(userId);
         await this.startNewIssue(userId, chatId, userProfile);
     }
   }
@@ -974,7 +975,7 @@ ${issue.description}
       return;
     }
 
-    conversationManager.updateConversation(
+    await conversationManager.updateConversation(
       userId,
       'branch',
       branch,
@@ -1003,7 +1004,7 @@ ${issue.description}
       return;
     }
 
-    conversationManager.updateConversation(
+    await conversationManager.updateConversation(
       userId,
       'department',
       department,
@@ -1031,7 +1032,7 @@ ${issue.description}
       return;
     }
 
-    conversationManager.updateConversation(
+    await conversationManager.updateConversation(
       userId,
       'category',
       category,
@@ -1059,7 +1060,7 @@ ${issue.description}
       return;
     }
 
-    conversationManager.updateConversation(
+    await conversationManager.updateConversation(
       userId,
       'urgency',
       urgency,
@@ -1076,7 +1077,7 @@ ${issue.description}
    * Handle description input
    */
   async handleDescriptionStep(userId, chatId, description) {
-    conversationManager.updateConversation(
+    await conversationManager.updateConversation(
       userId,
       'description',
       description,
@@ -1095,7 +1096,7 @@ ${issue.description}
   async handleContactStep(userId, chatId, contact, userProfile) {
     const contactPerson = contact.toUpperCase() === 'ME' ? userProfile.name : contact;
     
-    conversationManager.updateConversation(
+    await conversationManager.updateConversation(
       userId,
       'contactPerson',
       contactPerson,
@@ -1103,7 +1104,7 @@ ${issue.description}
     );
 
     // Show summary for confirmation
-    const data = conversationManager.getConversationData(userId);
+    const data = await conversationManager.getConversationData(userId);
     
     const summary = `📋 ISSUE SUMMARY
 
@@ -1134,7 +1135,7 @@ Is this correct?`;
     if (upperResponse.includes('YES') || upperResponse === '✅ YES, SUBMIT') {
       await this.submitIssue(userId, chatId);
     } else if (upperResponse.includes('NO') || upperResponse === '❌ NO, CANCEL') {
-      conversationManager.endConversation(userId);
+      await conversationManager.endConversation(userId);
       await messagingAdapter.sendMessage(
         chatId,
         '❌ Issue creation cancelled.\n\nSend any message to start a new issue.'
@@ -1157,7 +1158,7 @@ Is this correct?`;
    * - Ticket is immediately created and routed to appropriate groups
    */
   async submitIssue(userId, chatId) {
-    const conversation = conversationManager.getConversation(userId);
+    const conversation = await conversationManager.getConversation(userId);
     
     if (!conversation) {
       await messagingAdapter.sendMessage(chatId, '❌ Session expired. Please start over.');
@@ -1168,7 +1169,7 @@ Is this correct?`;
 
     // BOT CREATES TICKET IMMEDIATELY (no approval workflow)
     // This is the single source of truth for ticket creation
-    const issue = issueManager.createIssue({
+    const issue = await issueManager.createIssue({
       employeeId: userId,
       employeeName: conversation.userName,
       branch: data.branch,           // ROUTING KEY
@@ -1180,7 +1181,7 @@ Is this correct?`;
     });
 
     // End conversation
-    conversationManager.endConversation(userId);
+    await conversationManager.endConversation(userId);
 
     // Confirm to employee with cancel button
     const cancelButton = [
@@ -1199,7 +1200,7 @@ Is this correct?`;
     // 2. Central monitoring group (visibility only)
     await routingService.routeIssue(issue);
 
-    console.log(`[MessageHandler] Issue ${issue.issueId} submitted by ${conversation.userName}`);
+    logger.info(`[MessageHandler] Issue ${issue.issueId} submitted by ${conversation.userName}`);
   }
 
   /**
