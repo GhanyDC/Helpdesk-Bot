@@ -1,47 +1,60 @@
 # Telegram Helpdesk Bot
 
-A production-ready Telegram bot for internal helpdesk support requests. Employees can submit issues through a conversational interface, and support staff can manage issues via keyword commands in a central Telegram group.
+An enterprise-hardened Telegram bot for internal helpdesk support. Employees submit issues through a guided conversational wizard, and support staff manage tickets via inline buttons in branch-specific Telegram groups.
 
-> **📝 Note:** This project was recently migrated from Viber to Telegram. See [TELEGRAM_SETUP.md](TELEGRAM_SETUP.md) for detailed setup instructions.
+Runs in Docker containers with PostgreSQL, structured logging, DB-persisted sessions, and a secret webhook path.
+
+---
 
 ## Features
 
-✅ **Step-by-Step Issue Creation**
-- Department selection
-- Issue category selection
-- Urgency level selection
-- Detailed description
-- Contact person specification
-- Confirmation before submission
+**Issue Creation Wizard**
+- Branch selection (JHQ, TRK, GS, IPIL) — determines routing
+- Department selection (Accounting, Sales, HR, Operations, IT, Other) — metadata
+- Category (System, Network, Hardware, Software, Access, Other)
+- Urgency (Low, Medium, High, Critical)
+- Free-text description
+- Contact person (or type "ME")
+- Confirmation summary with inline buttons before submission
 
-✅ **Automated Issue Management**
-- Unique auto-generated Issue IDs (format: `ISSUE-YYYYMMDD-XXXX`)
-- SQLite database for persistent storage
-- Status tracking (pending → in-progress → resolved → closed)
-- Full audit trail of status changes
+**Ticket Lifecycle**
+- Auto-generated Issue IDs: `ISSUE-YYYYMMDD-XXXX`
+- Statuses: pending → in-process → resolved / resolved-with-issues → confirmed → closed
+- Also: cancelled-staff, cancelled-user
+- Full audit trail in `status_history` table
+- Support staff must provide remarks when resolving
 
-✅ **Central Support Group Integration**
-- New issues automatically posted to support group
-- Support staff update status using commands:
-  - `/status ISSUE-ID pending` - Mark as pending
-  - `/status ISSUE-ID in-progress` - Mark as in progress
-  - `/status ISSUE-ID resolved` - Mark as resolved
-  - `/status ISSUE-ID closed` - Mark as closed
+**Branch-Based Routing**
+- Tickets route to the branch support group matching the employee's selected branch
+- Optional central monitoring group receives a read-only copy of all tickets
+- Central monitoring group is auto-locked (messages deleted)
 
-✅ **Smart Notifications**
-- Employees receive automatic status updates
-- Real-time notifications when support staff update issues
-- Formatted messages with emojis for better UX
+**Notifications**
+- Employees get real-time status updates when support acts
+- Support group receives formatted issue cards with inline action buttons
 
-✅ **Permission System**
-- Employee role: Can create issues only
-- Support staff role: Can create issues AND update status
-- Configurable whitelist for authorized users
+**Permissions & Roles**
+- `employee` — can create issues
+- `support` — can create issues and update ticket statuses
+- `admin` — future use
+- Roles seeded from `SUPPORT_STAFF_IDS` env on boot; all other users default to employee
 
-✅ **Session Management**
-- Tracks conversation state per user
-- 30-minute inactivity timeout
-- Automatic cleanup of expired sessions
+**Scheduled Reports**
+- Daily summary at configurable time (default 18:00)
+- Weekly summary on Mondays at 09:00
+- Auto-close resolved tickets after 7 days
+
+**Enterprise Hardening**
+- PostgreSQL 15 with connection pooling (pg)
+- DB-persisted wizard sessions (survives container restarts)
+- Winston structured JSON logging with file rotation
+- Secret webhook path (`/telegram/webhook/<48-char-hex>`)
+- `/health` endpoint (checks DB connectivity)
+- Env validation at startup — refuses to boot on missing config
+- Graceful shutdown (SIGTERM/SIGINT)
+- Unhandled rejection / uncaught exception guards
+- Docker: non-root user, private network, no exposed DB port, health checks
+- Nightly backup script with 30-day retention
 
 ---
 
@@ -49,506 +62,422 @@ A production-ready Telegram bot for internal helpdesk support requests. Employee
 
 ```
 Help-Desk/
-├── server.js                  # Main webhook server (entry point)
-├── config.js                  # Configuration loader
-├── constants.js               # Conversation steps, categories, status values
-├── conversationManager.js     # Manages user conversation state
-├── issueManager.js            # Issue creation, storage, and retrieval
-├── telegramService.js         # Telegram API wrapper
-├── permissionsManager.js      # User authorization and roles
-├── messageHandler.js          # Message routing and conversation flow
+├── server.js                  # Express server, webhook, boot sequence, graceful shutdown
+├── config.js                  # Env validation, webhook secret generation
+├── constants.js               # Steps, branches, departments, statuses, keywords
+├── db.js                      # PostgreSQL pool, retry logic, schema DDL
+├── logger.js                  # Winston structured logging (JSON + file rotation)
+├── conversationManager.js     # DB-persisted wizard sessions (sessions table)
+├── issueManager.js            # Issue CRUD (issues + status_history tables)
+├── userIdLogger.js            # User registry + role management (users table)
+├── telegramService.js         # Telegram Bot API wrapper
+├── messageHandler.js          # Message routing, conversation flow, inline buttons
+├── messagingAdapter.js        # Platform abstraction layer
+├── permissionsManager.js      # Authorization checks
+├── routingService.js          # Branch-based ticket routing + central monitoring
+├── schedulerService.js        # Daily/weekly reports, auto-close
+├── statsService.js            # On-demand statistics and metrics
+├── Dockerfile                 # Multi-stage, node:18-alpine, non-root user
+├── docker-compose.yml         # App + PostgreSQL, private network, health checks
+├── backup.sh                  # Nightly pg_dump with gzip + rotation
+├── .env.production            # Environment config (not committed to git)
 ├── package.json               # Dependencies
-├── .env                       # Environment variables (create from .env.example)
-├── .env.example               # Template for environment variables
-└── data/
-    └── helpdesk.db           # SQLite database (auto-created)
+└── utils/
+    ├── databaseQueries.js     # Utility SQL queries
+    └── getUserIds.js          # User ID discovery helper
 ```
 
 ---
 
 ## Prerequisites
 
-1. **Node.js** (v14 or higher)
-2. **Telegram Bot** - Create via [@BotFather](https://t.me/botfather) on Telegram
-3. **ngrok** - For exposing local server to internet during testing
+| Requirement | Minimum |
+|---|---|
+| Docker Engine | 24+ |
+| Docker Compose | v2 (plugin) |
+| RAM | 1 GB |
+| Telegram Bot | Created via [@BotFather](https://t.me/botfather) |
+| ngrok (dev) or Domain + TLS (prod) | For webhook delivery |
+
+You do **not** need Node.js or PostgreSQL installed locally — Docker handles everything.
 
 ---
 
-## Installation
-
-### 1. Clone or Download the Project
-
-```powershell
-cd C:\Users\delac\Downloads\Help-Desk
-```
-
-### 2. Install Dependencies
-
-```powershell
-npm install
-```
-
-This will install:
-- `express` - Web server framework
-- `node-telegram-bot-api` - Telegram Bot SDK
-- `body-parser` - Parse incoming request bodies
-- `better-sqlite3` - SQLite database
-- `dotenv` - Environment variable management
-- `uuid` - UUID generation (future use)
-
-### 3. Create Environment File
-
-Copy the example environment file:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-### 4. Configure Environment Variables
-
-Open `.env` and fill in the required values:
-
-```env
-# Get this from @BotFather on Telegram
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
-
-# Bot display info
-BOT_NAME=Helpdesk Bot
-
-# Your ngrok URL (update after starting ngrok)
-WEBHOOK_URL=https://your-ngrok-url.ngrok.io
-
-# Server port
-PORT=3000
-
-# Your central Telegram group/chat ID (negative number for groups)
-SUPPORT_GROUP_ID=-1001234567890
-
-# Database path (default is fine)
-DB_PATH=./data/helpdesk.db
-
-# Support staff Telegram user IDs (comma-separated)
-# To get user IDs: Visit https://api.telegram.org/bot<TOKEN>/getUpdates
-SUPPORT_STAFF_IDS=123456789,987654321
-
-# Employee whitelist (leave empty to allow everyone)
-EMPLOYEE_IDS=
-```
-
----
-
-## Getting Telegram Bot Credentials
-
-> **🚦 Important:** For detailed step-by-step instructions, see [TELEGRAM_SETUP.md](TELEGRAM_SETUP.md)
-
-### Quick Start
-
-1. **Create Bot via @BotFather**
-   - Search for [@BotFather](https://t.me/botfather) on Telegram
-   - Send `/newbot` command
-   - Follow prompts to create your bot
-   - Save the **Bot Token** to `.env` as `TELEGRAM_BOT_TOKEN`
-
-2. **Get Group Chat ID**
-   - Create a Telegram group and add your bot
-   - Send a message in the group
-   - Visit: `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
-   - Look for `"chat":{"id":-1001234567890` (negative number)
-   - Save to `.env` as `SUPPORT_GROUP_ID`
-
-3. **Get User IDs for Permissions**
-   - Users send `/start` to your bot
-   - Visit: `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
-   - Look for `"from":{"id":123456789`
-   - Add to `.env` as `SUPPORT_STAFF_IDS`
-
----
-
-## Running the Bot
+## Quick Start (Local Development with ngrok)
 
 ### 1. Start ngrok
-
-Open a terminal and start ngrok to expose your local server:
 
 ```powershell
 ngrok http 3000
 ```
 
-You'll see output like:
+Copy the HTTPS forwarding URL (e.g. `https://xxxx-xx-xx.ngrok-free.dev`).
+
+> **Important:** Free-tier ngrok URLs change every time you restart ngrok. You must update `WEBHOOK_URL` in `.env.production` and restart the containers each time.
+
+### 2. Configure Environment
+
+Edit `.env.production`:
+
+```dotenv
+TELEGRAM_BOT_TOKEN=<your-bot-token>
+WEBHOOK_URL=<your-ngrok-https-url>
+DB_PASSWORD=<strong-random-password>
+POSTGRES_PASSWORD=<same-as-DB_PASSWORD>
+SUPPORT_GROUP_JHQ=<telegram-group-id>
+SUPPORT_STAFF_IDS=<comma-separated-user-ids>
 ```
-Forwarding  https://abc123xyz.ngrok.io -> http://localhost:3000
-```
 
-Copy the **https** URL (e.g., `https://abc123xyz.ngrok.io`)
+All required variables:
 
-### 2. Update Webhook URL
+| Variable | Description |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | Token from @BotFather |
+| `WEBHOOK_URL` | Your public HTTPS URL (ngrok or domain) |
+| `DB_HOST` | Database host (`db` in Docker) |
+| `DB_NAME` | Database name (`helpdesk`) |
+| `DB_USER` | Database user (`helpdesk`) |
+| `DB_PASSWORD` | Strong random password |
+| `POSTGRES_PASSWORD` | **Must match** `DB_PASSWORD` |
 
-Open `.env` and update:
-```env
-WEBHOOK_URL=https://abc123xyz.ngrok.io
-```
-
-### 3. Start the Bot Server
+### 3. Build & Run
 
 ```powershell
-npm start
+docker compose up -d --build
+```
+
+Check status:
+```powershell
+docker compose ps
+docker compose logs -f app
 ```
 
 You should see:
 ```
-🤖 Viber Helpdesk Bot Server
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ Server running on port 3000
-📍 Webhook: https://abc123xyz.ngrok.io/viber/webhook
-🤖 Bot Name: Helpdesk Bot
-💾 Database: ./data/helpdesk.db
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Database connection established
+Schema initialized
+Seeded 5 support staff roles from env
+Webhook set  url=https://xxxx.ngrok-free.dev/telegram/webhook/ab12cd34...
+Server started  port=3000
 ```
 
-### 4. Test the Bot
+### 4. Register the Webhook with Telegram
 
-1. Open Viber on your phone or desktop
-2. Search for your bot name
-3. Start a conversation
-4. Send any message to begin creating an issue
+After the app starts, check the logs for the full webhook URL:
+
+```powershell
+docker compose logs app | Select-String "Webhook set"
+```
+
+The bot automatically calls `setWebhook` on startup. Verify it took effect:
+
+```powershell
+Invoke-RestMethod "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"
+```
+
+If `last_error_message` is empty and `url` matches your ngrok URL, you're good.
+
+### 5. Test
+
+Open Telegram, find your bot, send `/start` or any message. The bot should reply with a welcome message and start the issue creation wizard.
 
 ---
 
-## Usage Guide
+## How to Use the Bot
 
-### For Employees
+### Employees — Creating an Issue
 
-1. **Start Conversation**
-   - Send any message to the bot
+1. Open Telegram and message your bot (e.g. @Initial_HelpdeskBot)
+2. Send `/start` or any text message
+3. The bot walks you through a guided wizard:
+   - **Branch** — tap a button (JHQ / TRK / GS / IPIL)
+   - **Department** — tap a button (Accounting / Sales / HR / etc.)
+   - **Category** — tap a button (System Issue / Network / Hardware / etc.)
+   - **Urgency** — tap a button (Low / Medium / High / Critical)
+   - **Description** — type a free-text description of the problem
+   - **Contact Person** — type a name, or type `ME` to use your own
+4. Review the summary card → tap **Confirm** to submit or **Cancel** to discard
+5. You receive an Issue ID (e.g. `ISSUE-20260219-0001`)
+6. You will be notified automatically whenever support staff update the status
 
-2. **Follow the Steps**
-   - Select your department
-   - Choose issue category
-   - Select urgency level
-   - Describe the issue
-   - Provide contact person (or type "ME")
+### Employees — Other Commands
 
-3. **Confirm and Submit**
-   - Review the summary
-   - Click "✅ Yes, Submit"
+| Command | Description |
+|---|---|
+| `/start` | Welcome message |
+| `/help` | Show available commands |
+| `/stats` | Your personal issue statistics |
+| `/cancel` | Cancel the current wizard mid-flow |
+| Any text during wizard | Advances to the next step |
 
-4. **Receive Confirmation**
-   - You'll get an Issue ID (e.g., `ISSUE-20260105-0001`)
-   - You'll receive automatic notifications when support staff update the status
+### Support Staff — Managing Tickets
 
-### For Support Staff
+New tickets appear automatically in your branch's support group with inline action buttons.
 
-1. **View New Issues**
-   - New issues are automatically posted to the central support group
-   - Each message contains full issue details and the Issue ID
+**Inline buttons on each ticket:**
+- **ACK** — Acknowledge (mark as in-process)
+- **RESOLVE** — Mark as resolved (bot will ask for remarks)
+- **RESOLVE W/ ISSUES** — Resolved with remaining issues
+- **CANCEL** — Cancel the ticket
 
-2. **Update Issue Status**
-   - Reply in the group or message the bot directly:
-     - `ACK ISSUE-20260105-0001` - Acknowledge the issue
-     - `ONGOING ISSUE-20260105-0001` - Mark as work in progress
-     - `RESOLVED ISSUE-20260105-0001` - Mark as resolved
+**Text commands (typed in the group or in DM with the bot):**
 
-3. **Employee Notification**
-   - When you update status, the employee automatically receives a notification
-   - The notification includes the new status and who updated it
+| Command | Effect |
+|---|---|
+| `ACK ISSUE-ID` | Acknowledge / mark in-process |
+| `ONGOING ISSUE-ID` | Mark as in-process |
+| `RESOLVED ISSUE-ID` | Mark as resolved (remarks required) |
+| `/status ISSUE-ID <status>` | Set any valid status |
+| `/stats` | Show support statistics |
+| `/open_issues` | List all open tickets |
+| `/my_issues` | Your assigned tickets |
+
+When you tap **RESOLVE**, the bot will prompt you to type remarks explaining the resolution. These are stored on the ticket and sent to the employee.
+
+### Central Monitoring Group (Optional)
+
+If `ENABLE_CENTRAL_MONITORING=true` and `CENTRAL_MONITORING_GROUP` is set, a read-only copy of every ticket is forwarded there. The group is auto-locked so only the bot can post.
 
 ---
 
 ## Database Schema
 
-### Issues Table
+### issues
 
 ```sql
 CREATE TABLE issues (
-  issue_id TEXT PRIMARY KEY,           -- e.g., ISSUE-20260105-0001
-  employee_id TEXT NOT NULL,           -- Viber user ID
-  employee_name TEXT NOT NULL,         -- Employee name
-  department TEXT NOT NULL,            -- Department
-  category TEXT NOT NULL,              -- Issue category
-  urgency TEXT NOT NULL,               -- Low/Medium/High/Critical
-  description TEXT NOT NULL,           -- Issue description
-  contact_person TEXT,                 -- Contact person name
-  status TEXT NOT NULL,                -- pending/in-progress/resolved/closed
-  created_at DATETIME,                 -- Creation timestamp
-  updated_at DATETIME,                 -- Last update timestamp
-  resolved_at DATETIME                 -- Resolution timestamp
+  issue_id        TEXT PRIMARY KEY,     -- ISSUE-YYYYMMDD-XXXX
+  employee_id     TEXT NOT NULL,        -- Telegram user ID
+  employee_name   TEXT NOT NULL,
+  branch          TEXT,                 -- JHQ / TRK / GS / IPIL
+  department      TEXT NOT NULL,
+  category        TEXT NOT NULL,
+  urgency         TEXT NOT NULL,
+  description     TEXT NOT NULL,
+  contact_person  TEXT,
+  remarks         TEXT,                 -- Support staff resolution remarks
+  assigned_to     TEXT,
+  assigned_to_name TEXT,
+  status          TEXT NOT NULL,
+  created_at      TIMESTAMP,
+  updated_at      TIMESTAMP,
+  resolved_at     TIMESTAMP
 );
 ```
 
-### Status History Table
+### status_history
 
 ```sql
 CREATE TABLE status_history (
-  id INTEGER PRIMARY KEY,
-  issue_id TEXT NOT NULL,              -- Reference to issues table
-  old_status TEXT,                     -- Previous status
-  new_status TEXT NOT NULL,            -- New status
-  updated_by TEXT NOT NULL,            -- Viber ID of updater
-  updated_by_name TEXT,                -- Name of updater
-  updated_at DATETIME                  -- Update timestamp
+  id              SERIAL PRIMARY KEY,
+  issue_id        TEXT REFERENCES issues(issue_id) ON DELETE CASCADE,
+  old_status      TEXT,
+  new_status      TEXT NOT NULL,
+  updated_by      TEXT NOT NULL,        -- Telegram user ID
+  updated_by_name TEXT,
+  remarks         TEXT,
+  updated_at      TIMESTAMP
+);
+```
+
+### users
+
+```sql
+CREATE TABLE users (
+  telegram_id  TEXT PRIMARY KEY,
+  username     TEXT,
+  first_name   TEXT,
+  last_name    TEXT,
+  full_name    TEXT,
+  chat_id      TEXT,
+  role         TEXT CHECK (role IN ('employee', 'support', 'admin')) DEFAULT 'employee',
+  first_seen   TIMESTAMP,
+  last_seen    TIMESTAMP,
+  message_count INTEGER DEFAULT 1
+);
+```
+
+### sessions
+
+```sql
+CREATE TABLE sessions (
+  telegram_id TEXT PRIMARY KEY,
+  state       TEXT,
+  data        JSONB,                    -- Full wizard state
+  updated_at  TIMESTAMP
 );
 ```
 
 ---
 
-## Module Descriptions
+## Environment Variables Reference
 
-### 1. `server.js` - Main Entry Point
-- Sets up Express server
-- Configures Viber webhook
-- Handles bot events (subscribed, message_received, etc.)
-- Manages graceful shutdown
-
-### 2. `config.js` - Configuration Management
-- Loads environment variables from `.env`
-- Exports configuration objects
-- Handles missing configuration gracefully
-
-### 3. `constants.js` - Application Constants
-- Conversation steps (DEPARTMENT, CATEGORY, etc.)
-- Department options
-- Issue categories
-- Urgency levels
-- Issue status values
-- Support keywords
-
-### 4. `conversationManager.js` - State Management
-- Tracks active conversations per user
-- Stores conversation data (department, category, etc.)
-- Manages session timeouts (30 minutes)
-- Provides methods to start, update, and end conversations
-
-### 5. `issueManager.js` - Issue Database Operations
-- Initializes SQLite database
-- Generates unique Issue IDs
-- Creates and retrieves issues
-- Updates issue status
-- Logs status change history
-- Provides query methods with filters
-
-### 6. `viberService.js` - Viber API Wrapper
-- Wraps Viber Bot SDK methods
-- Sends text messages
-- Sends keyboard menus (buttons)
-- Sends group messages
-- Formats issue notifications
-- Provides pre-built keyboards for each conversation step
-
-### 7. `permissionsManager.js` - Authorization
-- Manages support staff and employee lists
-- Checks if users can create issues
-- Checks if users can update status
-- Provides authorization methods
-- Supports adding/removing users dynamically
-
-### 8. `messageHandler.js` - Message Routing
-- Routes incoming messages
-- Handles conversation flow
-- Processes support commands (ACK, ONGOING, RESOLVED)
-- Validates user input at each step
-- Submits issues to database
-- Sends notifications
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | Yes | — | From @BotFather |
+| `WEBHOOK_URL` | Yes | — | Public HTTPS URL |
+| `DB_HOST` | Yes | — | PostgreSQL host (`db` in Docker) |
+| `DB_NAME` | Yes | — | Database name |
+| `DB_USER` | Yes | — | Database user |
+| `DB_PASSWORD` | Yes | — | Database password |
+| `POSTGRES_DB` | Yes | — | Must match `DB_NAME` |
+| `POSTGRES_USER` | Yes | — | Must match `DB_USER` |
+| `POSTGRES_PASSWORD` | Yes | — | Must match `DB_PASSWORD` |
+| `BOT_NAME` | No | `Helpdesk Bot` | Display name |
+| `PORT` | No | `3000` | Server port |
+| `WEBHOOK_SECRET` | No | Auto-generated | Pin webhook path across restarts |
+| `SUPPORT_GROUP_ID` | No | — | Fallback support group |
+| `SUPPORT_GROUP_JHQ` | No | — | JHQ branch group |
+| `SUPPORT_GROUP_TRK` | No | — | TRK branch group |
+| `SUPPORT_GROUP_GS` | No | — | GS branch group |
+| `SUPPORT_GROUP_IPIL` | No | — | IPIL branch group |
+| `CENTRAL_MONITORING_GROUP` | No | — | Read-only monitoring group |
+| `ENABLE_CENTRAL_MONITORING` | No | `false` | Enable/disable monitoring |
+| `SUPPORT_STAFF_IDS` | No | — | Comma-separated Telegram user IDs |
+| `EMPLOYEE_IDS` | No | — | Employee whitelist (empty = allow everyone) |
+| `DAILY_REPORT_HOUR` | No | `18` | Hour for daily report (0-23) |
+| `DAILY_REPORT_MINUTE` | No | `0` | Minute for daily report |
+| `LOG_LEVEL` | No | `info` | Winston log level (`debug`, `info`, `warn`, `error`) |
+| `LOG_DIR` | No | `/app/logs` | Log file directory |
 
 ---
 
-## Development Tips
+## Getting Telegram Credentials
 
-### Running in Development Mode
+See [TELEGRAM_SETUP.md](TELEGRAM_SETUP.md) for full step-by-step instructions.
 
-Install nodemon for auto-restart on file changes:
+**Quick version:**
 
-```powershell
-npm install --save-dev nodemon
-```
-
-Then run:
-
-```powershell
-npm run dev
-```
-
-### Viewing Database Content
-
-You can use any SQLite browser or command-line tool:
-
-```powershell
-# Using sqlite3 CLI (if installed)
-sqlite3 data/helpdesk.db "SELECT * FROM issues;"
-```
-
-Or use a GUI tool like:
-- [DB Browser for SQLite](https://sqlitebrowser.org/)
-- [SQLiteStudio](https://sqlitestudio.pl/)
-
-### Debugging
-
-Enable detailed logging by adding console.log statements in:
-- `messageHandler.js` - See message flow
-- `conversationManager.js` - See state changes
-- `issueManager.js` - See database operations
+1. **Create bot** — Message [@BotFather](https://t.me/botfather), send `/newbot`, save the token
+2. **Get group IDs** — Add the bot to a group, send a message, visit `https://api.telegram.org/bot<TOKEN>/getUpdates`, find the negative chat ID
+3. **Get user IDs** — Users send `/start` to the bot, check `getUpdates` for the `"from":{"id":...}` field
 
 ---
 
-## Future Enhancements
+## Common Operations
 
-Here are some ideas for extending the bot:
+```powershell
+# View live logs
+docker compose logs -f app
 
-1. **Export to Google Sheets**
-   - Automatically sync issues to a Google Sheet
-   - Use Google Sheets API
+# Restart the bot
+docker compose restart app
 
-2. **Email Notifications**
-   - Send email to support team when critical issues are created
-   - Use Nodemailer or SendGrid
+# Rebuild after code changes
+docker compose up -d --build
 
-3. **File Attachments**
-   - Allow employees to attach screenshots
-   - Store in cloud storage (AWS S3, Google Drive)
+# Database shell
+docker compose exec db psql -U helpdesk -d helpdesk
 
-4. **Search and List Commands**
-   - `/myissues` - List user's issues
-   - `/search <keyword>` - Search issues
-   - `/stats` - Show statistics
+# Health check
+Invoke-RestMethod http://localhost:3000/health
 
-5. **Escalation Rules**
-   - Auto-escalate HIGH priority issues after X hours
-   - Send reminders to support group
+# Stop (data preserved)
+docker compose down
 
-6. **Web Dashboard**
-   - Build a simple web interface to view all issues
-   - Use Express + a template engine (EJS, Pug)
-
-7. **Admin Commands**
-   - `/addstaff <user_id>` - Add support staff
-   - `/removestaff <user_id>` - Remove support staff
-   - `/stats` - View issue statistics
-
-8. **Multi-language Support**
-   - Add language selection
-   - Store translations in JSON files
-
-9. **SLA Tracking**
-   - Track response time
-   - Alert if issues exceed SLA thresholds
-
-10. **Integration with Ticketing Systems**
-    - Sync with Jira, Zendesk, Freshdesk
-    - Use their APIs
+# Stop + delete data (DANGER)
+docker compose down -v
+```
 
 ---
 
 ## Troubleshooting
 
-### Issue: Webhook not receiving messages
+### Bot not responding to messages
 
-**Solution:**
-1. Check if ngrok is running
-2. Verify `WEBHOOK_URL` in `.env` is correct
-3. Ensure webhook was set successfully (check console on startup)
-4. Test webhook manually: `curl https://your-ngrok-url.ngrok.io/viber/webhook`
+This is the most common issue. Check these in order:
 
-### Issue: Bot not responding
+1. **Is ngrok running?** Free-tier ngrok tunnels shut down when you close the terminal or after inactivity. Restart ngrok and update `WEBHOOK_URL` in `.env.production`, then `docker compose restart app`.
 
-**Solution:**
-1. Check server logs for errors
-2. Verify `VIBER_AUTH_TOKEN` is correct
-3. Ensure user is authorized (check `EMPLOYEE_IDS` in `.env`)
-4. Restart the server
+2. **Did the ngrok URL change?** Free ngrok generates a new URL every restart. The webhook URL in `.env.production` must match the current ngrok URL exactly.
 
-### Issue: Support commands not working
+3. **Is the webhook registered?** Check:
+   ```powershell
+   $token = "<YOUR_TOKEN>"
+   (Invoke-RestMethod "https://api.telegram.org/bot$token/getWebhookInfo").result | Format-List
+   ```
+   Look at `last_error_message`. Common errors:
+   - **"404 Not Found"** — ngrok tunnel is dead or URL changed
+   - **"Wrong response from the webhook"** — ngrok interstitial page or route mismatch
+   - **"Connection refused"** — container not running
 
-**Solution:**
-1. Verify user ID is in `SUPPORT_STAFF_IDS`
-2. Check command format: `ACK ISSUE-ID` (with space)
-3. Verify Issue ID exists in database
-4. Check server logs for error messages
+4. **Is the container healthy?**
+   ```powershell
+   docker compose ps
+   docker compose logs --tail 30 app
+   ```
 
-### Issue: Database errors
+5. **ngrok free-tier interstitial page** — ngrok shows a browser consent page on first visit, which can block Telegram's webhook delivery. Solutions:
+   - Use a paid ngrok plan (removes the interstitial)
+   - Use an alternative like [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/), [localhost.run](https://localhost.run/), or [bore](https://github.com/ekzhang/bore)
+   - Deploy to a VPS with a real domain
 
-**Solution:**
-1. Ensure `data/` directory exists and is writable
-2. Check if SQLite is properly installed
-3. Try deleting `data/helpdesk.db` and restarting (will reset all data)
+### Container keeps restarting
 
-### Issue: Group messages not working
+```powershell
+docker compose logs --tail 50 app
+```
 
-**Solution:**
-1. Verify bot is added to the group
-2. Get the correct group ID (see "Get Support Group ID" section)
-3. Update `SUPPORT_GROUP_ID` in `.env`
-4. Restart the server
+Common causes:
+- Missing env variables → `FATAL: Missing required environment variables`
+- DB password mismatch → `DB_PASSWORD` and `POSTGRES_PASSWORD` must be identical in `.env.production`
+- Port already in use → stop other processes on port 3000
+
+### Webhook 404 after container restart
+
+The webhook path includes a random secret that changes on every restart (unless you pin `WEBHOOK_SECRET`). After first successful boot:
+1. Check logs: `docker compose logs app | Select-String "Webhook set"`
+2. Copy the hex secret from the URL
+3. Add `WEBHOOK_SECRET=<that-hex>` to `.env.production`
+4. Restart: `docker compose restart app`
+
+This ensures the webhook path stays stable so you don't need to re-register with Telegram.
+
+### Database connection errors
+
+The app retries database connections 10 times with exponential backoff (2s → 32s). If it still fails:
+- Check `docker compose logs db` for PostgreSQL errors
+- Verify `DB_PASSWORD` matches `POSTGRES_PASSWORD` in `.env.production`
+- Try `docker compose down -v` then `docker compose up -d --build` (resets the database)
+
+### Support commands not working in groups
+
+1. The bot must be an **admin** in the support group to read messages
+2. Verify the user's Telegram ID is in `SUPPORT_STAFF_IDS`
+3. Commands must include the full issue ID: `ACK ISSUE-20260219-0001`
 
 ---
 
-## Security Notes
+## Development
 
-1. **Keep `.env` secure**
-   - Never commit `.env` to version control
-   - `.env` is already in `.gitignore`
+### Running locally without Docker
 
-2. **Authentication Token**
-   - Keep your `VIBER_AUTH_TOKEN` secret
-   - Regenerate it if exposed
+Requires Node.js 18+ and a running PostgreSQL instance:
 
-3. **User IDs**
-   - Viber user IDs are permanent unique identifiers
-   - Don't share them publicly
+```powershell
+npm install
 
-4. **Database Backups**
-   - Regularly backup `data/helpdesk.db`
-   - Consider automated backup scripts
+# Create a .env file with DB_HOST=localhost and your local Postgres credentials
+npm run dev   # uses nodemon for auto-restart
+```
 
-5. **Production Deployment**
-   - Use environment variables (not `.env` file)
-   - Use a proper webhook URL (not ngrok)
-   - Consider using PM2 for process management
-   - Set up monitoring and logging
+### Viewing logs
+
+In Docker, winston writes JSON logs to `/app/logs/`:
+```powershell
+docker compose exec app cat /app/logs/app.log
+docker compose exec app cat /app/logs/error.log
+```
+
+Set `LOG_LEVEL=debug` in `.env.production` for verbose output including webhook payloads and session state changes.
 
 ---
 
 ## Production Deployment
 
-When ready to deploy to production:
+See [DOCKER_DEPLOYMENT_GUIDE.md](DOCKER_DEPLOYMENT_GUIDE.md) for full instructions including Nginx + TLS, automated backups, and security checklist.
 
-1. **Use a VPS or Cloud Server**
-   - AWS EC2, DigitalOcean, Azure, etc.
-   - Install Node.js on the server
-
-2. **Get a Domain Name**
-   - Purchase a domain
-   - Point it to your server IP
-   - Set up SSL certificate (Let's Encrypt)
-
-3. **Use PM2 for Process Management**
-   ```bash
-   npm install -g pm2
-   pm2 start server.js --name helpdesk-bot
-   pm2 startup
-   pm2 save
-   ```
-
-4. **Set Up Nginx (Optional)**
-   - Use as reverse proxy
-   - Handle SSL termination
-
-5. **Environment Variables**
-   - Don't use `.env` file in production
-   - Set environment variables directly on the server
-
-6. **Monitoring**
-   - Set up logging (Winston, Morgan)
-   - Monitor uptime (UptimeRobot, Pingdom)
-   - Set up error tracking (Sentry)
-
----
-
-## Support
-
-For questions or issues:
-
-1. Check the troubleshooting section above
-2. Review the code comments in each module
-3. Check Viber Bot API documentation: https://developers.viber.com/docs/api/rest-bot-api/
+See [RISK_PERFORMANCE_ANALYSIS.md](RISK_PERFORMANCE_ANALYSIS.md) for risk matrix and performance characteristics.
 
 ---
 
@@ -558,16 +487,4 @@ ISC
 
 ---
 
-## Credits
-
-Built with ❤️ for internal helpdesk automation
-
-**Key Technologies:**
-- Node.js & Express
-- Viber Bot SDK
-- SQLite (better-sqlite3)
-- ngrok (development)
-
----
-
-**Ready to start?** Follow the installation steps above and you'll have your helpdesk bot running in minutes! 🚀
+**Key Technologies:** Node.js 18, Express, node-telegram-bot-api, PostgreSQL 15, pg, Winston, Docker
