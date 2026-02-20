@@ -579,4 +579,18 @@ ISC
 
 ---
 
+## About
+
+**Telegram Helpdesk Bot** — v1.0.0
+
+Developed by:
+- **Ghanymede Dela Cruz**
+- **Carl Angelo Victoria**
+
+Built for internal enterprise use. Manages employee support tickets through Telegram with branch-based routing, PostgreSQL persistence, and Docker deployment.
+
+For questions, issues, or contributions, contact the development team.
+
+---
+
 **Key Technologies:** Node.js 18, Express, node-telegram-bot-api, PostgreSQL 15, pg, Winston, Docker

@@ -14,7 +14,7 @@
     "helpdesk",
     "support"
   ],
-  "author": "Your Company",
+  "author": "Ghanymede Dela Cruz, Carl Angelo Victoria",
   "license": "ISC",
   "dependencies": {
     "body-parser": "^1.20.2",
