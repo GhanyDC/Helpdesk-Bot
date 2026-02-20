@@ -1,0 +1,22 @@
+version: 38
+jobs:
+- name: Build Docker Image
+  steps:
+  - !BuildImageStep
+    name: Build & Push
+    buildContext: auto
+    dockerfile: Dockerfile
+    output: !RegistryOutput
+      tags: help-desk:@tag@
+  paramSpecs:
+  - !TextParam
+    name: tag
+    defaultValueProvider: !SpecifiedDefaultValue
+      value: latest
+  triggers:
+  - !BranchUpdateTrigger
+    branches: main
+  retryCondition: never
+  maxRetries: 3
+  retryDelay: 30
+  timeout: 3600
