@@ -473,11 +473,103 @@ Set `LOG_LEVEL=debug` in `.env.production` for verbose output including webhook 
 
 ---
 
+## Adding Support Groups / Staff
+
+This section explains how to register new branch support groups and add new support staff members.
+
+### Step 1 — Create a Telegram Group for the Branch
+
+1. Open Telegram and create a new **Group**.
+2. Name it clearly, e.g. `Helpdesk — JHQ Support`.
+3. Add the bot (e.g. `@Initial_HelpdeskBot`) to the group.
+4. **Promote the bot to Admin** so it can read messages, send messages, and pin messages.
+
+### Step 2 — Get the Group Chat ID
+
+1. Send any message in the newly created group.
+2. Open a browser and visit:
+   ```
+   https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates
+   ```
+3. Look for the `"chat":{"id":-100XXXXXXXXXX, ...}` entry. The **negative number** is the group chat ID.
+4. Copy it.
+
+### Step 3 — Register the Group in Your Environment
+
+Open `.env.production` (or `.env` for development) and set the variable for the branch:
+
+```dotenv
+# Existing branches
+SUPPORT_GROUP_JHQ=-100XXXXXXXXXX
+SUPPORT_GROUP_TRK=-100YYYYYYYYYY
+SUPPORT_GROUP_GS=-100ZZZZZZZZZZ
+SUPPORT_GROUP_IPIL=-100WWWWWWWWWW
+```
+
+If you are adding a **new branch** that doesn't exist yet:
+
+1. Add the env var: `SUPPORT_GROUP_NEWBRANCH=-100NNNNNNNNNN`
+2. Update [config.js](config.js) — add the key to `support.branchGroups`:
+   ```js
+   branchGroups: {
+     JHQ: process.env.SUPPORT_GROUP_JHQ,
+     TRK: process.env.SUPPORT_GROUP_TRK,
+     GS: process.env.SUPPORT_GROUP_GS,
+     IPIL: process.env.SUPPORT_GROUP_IPIL,
+     NEWBRANCH: process.env.SUPPORT_GROUP_NEWBRANCH,   // <-- add this
+   },
+   ```
+3. Update [constants.js](constants.js) — add `'NEWBRANCH'` to the branches array so the wizard shows it as an option.
+
+### Step 4 — Add Support Staff Members
+
+1. Ask the new staff member to message the bot (`/start`).
+2. Retrieve their Telegram user ID:
+   - Visit `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
+   - Find their message and note the `"from":{"id":123456789}` value.
+   - Alternatively, they can message `@userinfobot` on Telegram to see their own ID.
+3. Add their numeric ID to `SUPPORT_STAFF_IDS` in your env file (comma-separated):
+   ```dotenv
+   SUPPORT_STAFF_IDS=111111111,222222222,333333333
+   ```
+4. Restart the bot:
+   ```powershell
+   docker compose restart app
+   ```
+   On startup the bot seeds the `support` role for every ID in `SUPPORT_STAFF_IDS`.
+
+### Step 5 — (Optional) Enable Central Monitoring
+
+To give management a read-only view of all tickets across branches:
+
+1. Create a Telegram group for central monitoring.
+2. Add the bot and promote to admin.
+3. Get the group chat ID (same method as Step 2).
+4. Set the env vars:
+   ```dotenv
+   CENTRAL_MONITORING_GROUP=-100MMMMMMMMMM
+   ENABLE_CENTRAL_MONITORING=true
+   ```
+5. Restart: `docker compose restart app`
+
+### Step 6 — Verify
+
+- Check logs: `docker compose logs --tail 20 app`
+- You should see `Seeded N support staff roles from env`
+- Create a test ticket and confirm it routes to the correct group.
+
+---
+
 ## Production Deployment
 
-See [DOCKER_DEPLOYMENT_GUIDE.md](DOCKER_DEPLOYMENT_GUIDE.md) for full instructions including Nginx + TLS, automated backups, and security checklist.
+For production, use a VPS with a real domain and TLS. Key steps:
 
-See [RISK_PERFORMANCE_ANALYSIS.md](RISK_PERFORMANCE_ANALYSIS.md) for risk matrix and performance characteristics.
+1. Point your domain to the server.
+2. Set up Nginx as a reverse proxy with Let's Encrypt TLS.
+3. Set `WEBHOOK_URL=https://yourdomain.com` in `.env.production`.
+4. Pin `WEBHOOK_SECRET` after first boot (see Troubleshooting above).
+5. Run `docker compose up -d --build`.
+6. Schedule nightly backups with `backup.sh`.
 
 ---
 
