@@ -573,6 +573,62 @@ For production, use a VPS with a real domain and TLS. Key steps:
 
 ---
 
+## OneDev CI/CD Deployment
+
+The project includes a `.onedev-buildspec.yml` file for automated Docker image building using OneDev 11.11.
+
+### Build Configuration
+
+The build specification includes:
+- **Job Name**: `Build Docker Image`
+- **Trigger**: Auto-builds on pushes to `main` branch
+- **Output**: Docker image tagged as `help-desk:@tag@` (configurable)
+- **Timeout**: 1 hour with 3 retry attempts
+
+### Setup Steps
+
+1. **Push Code**: Ensure your code and `.onedev-buildspec.yml` are in your OneDev repository
+
+2. **Configure Registry** (Optional):
+   ```
+   Administration → Registries → Add Registry
+   ```
+   Add Docker Hub, AWS ECR, or your preferred registry credentials.
+
+3. **Trigger Build**:
+   - **Manual**: Go to **Builds** → **New Build** → **Build Docker Image**
+   - **Automatic**: Push to `main` branch triggers automatically
+
+4. **Customize Image Tag**:
+   - Default: `help-desk:latest`
+   - Override: Set `tag` parameter to `v1.0.0`, `production`, etc.
+
+5. **Deploy Built Image**:
+   ```bash
+   # Pull the built image
+   docker pull your-registry.com/help-desk:latest
+   
+   # Update docker-compose.yml to use the registry image
+   # Replace: build: . 
+   # With: image: your-registry.com/help-desk:latest
+   
+   # Deploy
+   docker compose up -d
+   ```
+
+### Build Outputs
+
+- **With Registry**: Image pushed to configured Docker registry
+- **Local Only**: Image stored on OneDev build agent (modify `.onedev-buildspec.yml` output to `!LocalOutput {}`)
+
+### Monitoring
+
+- **Build Logs**: Available in real-time during build execution
+- **Build History**: All builds tracked with status, duration, and artifacts
+- **Notifications**: Configure webhooks for build completion alerts
+
+---
+
 ## License
 
 ISC
